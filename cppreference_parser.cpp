@@ -3,21 +3,50 @@ c++: 23
 package_definitions: true
 deps:
     - pub.egorpugin.primitives.http
+    - pub.egorpugin.primitives.templates2
     - pub.egorpugin.primitives.sw.main
     - org.sw.demo.zeux.pugixml
     - org.sw.demo.htacg.tidy_html5
+    - org.sw.demo.sqlite3
+    - org.sw.demo.boost.pfr
 */
 
 #include <pugixml.hpp>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
+#include <primitives/templates2/sqlite.h>
 #include <tidy.h>
 #include <tidybuffio.h>
 
 #include <format>
 #include <print>
 
-path mirror_root_dir = "cppreference";
+namespace db::parser {
+
+using namespace primitives::sqlite::db;
+
+struct schema {
+    struct tables_ {
+        struct page {
+            type<int64_t, primary_key{}, autoincrement{}> page_id;
+            type<std::string, unique{}> name;
+            type<std::string> source;
+        } page_;
+        struct templates {
+            type<int64_t, primary_key{}, autoincrement{}> template_id;
+            type<std::string, unique{}> name;
+        } templates_;
+        struct page_template {
+            type<int64_t, primary_key{}, autoincrement{}> page_template_id;
+            foreign_key<page, &page::page_id> page_id;
+            foreign_key<templates, &templates::template_id> template_id;
+        } page_template_;
+    } tables;
+};
+
+} // namespace db::parser
+
+const path mirror_root_dir = "cppreference";
 
 auto url_base = "cppreference.com"s;
 auto lang = "en"s;
@@ -36,14 +65,8 @@ auto make_edit_page_url(auto &&page) {
     return std::format("{}/{}/index.php?title={}&action=edit", make_base_url(), edit_page, primitives::http::url_encode(page));
 }
 
-auto make_page_fn(auto &&pagename) {
-    auto pagefn = mirror_root_dir / pagename;
-    pagefn = boost::replace_all_copy(pagefn.u8string(), "File:", "File/");
-    pagefn = boost::replace_all_copy(pagefn.u8string(), "Template:", "Template/");
-#ifdef _WIN32 // always?
-    pagefn = boost::replace_all_copy(pagefn.u8string(), ":", "_");
-#endif
-    return pagefn;
+auto db_fb() {
+    return path{mirror_root_dir} += ".db";
 }
 auto tidy_html(auto &&s) {
     TidyDoc tidyDoc = tidyCreate();
@@ -124,6 +147,8 @@ struct page {
                 if (false
                     || v[0].contains('{')
                     || v[0].contains('#')
+                    || v[0].contains('(')
+                    || v[0].contains('<')
                     ) {
                     continue;
                 }
@@ -137,8 +162,12 @@ struct page {
 };
 
 struct parser {
+    primitives::sqlite::sqlitemgr db{db_fb()};
     std::map<std::string, page> pages;
 
+    parser() {
+        db.create_tables(::db::parser::schema{});
+    }
     void start() {
         parse_page(start_page);
         while (1) {
@@ -168,24 +197,42 @@ struct parser {
         if (pages.contains(pagename)) {
             return;
         }
-        auto pagefnbase = make_page_fn(pagename);
-        auto pagefn = path{pagefnbase} += ".txt";
-        auto pagefn_templates = path{pagefnbase} += ".templates";
-        if (fs::exists(pagefn)) {
+
+        auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
+        auto db_page_i = db_page_sel.begin();
+        if (db_page_i != db_page_sel.end()) {
             page p;
-            p.source = read_file(pagefn);
+            auto &db_p = *db_page_i;
+            p.source = db_p.source;
             p.parse_links();
-            for (auto &&l : read_lines(pagefn_templates)) {
-                p.templates.insert(l);
+            for (auto &&t : db.select<::db::parser::schema::tables_::page_template,
+                                      &::db::parser::schema::tables_::page_template::page_id>(db_p.page_id)) {
+                auto tt = *db.select<::db::parser::schema::tables_::templates,
+                                     &::db::parser::schema::tables_::templates::template_id>(t.template_id)
+                               .begin();
+                p.templates.insert(tt.name);
             }
             pages.emplace(pagename, p);
             return;
         }
+
         std::println("parsing {}", pagename);
-        auto &&[it,_] = pages.emplace(pagename, make_edit_page_url(pagename));
-        auto &p = it->second;
-        write_file(pagefn, p.source);
-        write_lines(pagefn_templates, p.templates);
+        try {
+            auto &&[it, _] = pages.emplace(pagename, make_edit_page_url(pagename));
+            auto &p = it->second;
+
+            auto tr = db.scoped_transaction();
+            auto templates_ins = db.prepared_insert<::db::parser::schema::tables_::templates, primitives::sqlite::db::or_ignore{}>();
+            auto page_ins = db.prepared_insert<::db::parser::schema::tables_::page, primitives::sqlite::db::or_ignore{}>();
+            auto page_template_ins = db.prepared_insert<::db::parser::schema::tables_::page_template, primitives::sqlite::db::or_ignore{}>();
+            auto [page_id,pn] = page_ins.insert({.name = pagename, .source = p.source});
+            for (auto &&t : p.templates) {
+                auto [template_id,tn] = templates_ins.insert({.name = t});
+                page_template_ins.insert({.page_id=page_id, .template_id=template_id});
+            }
+        } catch (std::exception &e) {
+            std::cerr << e.what() << "\n";
+        }
     }
 };
 
