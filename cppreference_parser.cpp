@@ -11,6 +11,8 @@ deps:
     - org.sw.demo.boost.pfr
 */
 
+// also see https://github.com/PeterFeicht/cppreference-doc
+
 #include <pugixml.hpp>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
@@ -94,7 +96,7 @@ auto download_url(auto &&url) {
     if (resp.http_code != 200) {
         throw std::runtime_error{std::format("url = {}, http code = {}", url, resp.http_code)};
     }
-    return tidy_html(resp.response);
+    return resp.response;
 }
 
 auto find_text_between(auto &&text, auto &&from, auto &&to) {
@@ -118,7 +120,7 @@ struct page {
     std::set<std::string> templates;
 
     page() = default;
-    page(const std::string &url) : text{download_url(url)} {
+    page(const std::string &url) : text{tidy_html(download_url(url))} {
         pugi::xml_document doc;
         if (auto r = doc.load_buffer(text.data(), text.size()); !r) {
             throw std::runtime_error{std::format("url = {}, xml parse error = {}", url, r.description())};
@@ -189,7 +191,8 @@ struct parser {
         if (false
             || pagename.starts_with("Talk")
             || pagename.starts_with("Template talk")
-            || pagename.starts_with("Template_talk")
+            || pagename.starts_with("User")
+            //|| pagename.starts_with("User talk") // we skip all users
             || pagename.starts_with("File")
             ) {
             return;
@@ -215,6 +218,10 @@ struct parser {
             pages.emplace(pagename, p);
             return;
         }
+
+        /*if (!(pagename.starts_with("c/") || pagename.starts_with("cpp/"))) {
+            return;
+        }*/
 
         std::println("parsing {}", pagename);
         try {
