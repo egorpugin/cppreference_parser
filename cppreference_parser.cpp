@@ -162,6 +162,14 @@ struct page {
         // actually there is no visible mapping between link or link text and pages
         // see https://en.cppreference.com/w/c/23 and <stdnoreturn.h> for this
         // it leads to https://en.cppreference.com/w/c/language/_Noreturn instead
+        //
+        // so we need to:
+        // 1. parse all page
+        // 2. find <a> links to this site
+        // 3. parse page name from it, check for c/ or cpp/ start
+        // 4. save its source (or full page?)
+        // "//a[starts-with(@href,'/w/c')]"
+        // "//a[starts-with(@href,'/w/cpp')]"
         for (auto &&l : find_text_between(source, "{{"sv, "}}"sv)) {
             if (l.empty()) {
                 continue;
