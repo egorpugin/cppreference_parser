@@ -115,12 +115,13 @@ auto find_text_between(auto &&text, auto &&from, auto &&to) {
 
 struct page {
     std::string text;
+    std::string name;
     std::string source;
     std::set<std::string> links;
     std::set<std::string> templates;
 
     page() = default;
-    page(const std::string &url) : text{tidy_html(download_url(url))} {
+    page(const std::string &name, const std::string &url) : name{name}, text{tidy_html(download_url(url))} {
         pugi::xml_document doc;
         if (auto r = doc.load_buffer(text.data(), text.size()); !r) {
             throw std::runtime_error{std::format("url = {}, xml parse error = {}", url, r.description())};
@@ -137,30 +138,85 @@ struct page {
         parse_links();
     }
     void parse_links() {
-        auto f = [&](auto &&b, auto &&e) {
-            for (auto &&l : find_text_between(source, b, e)) {
-                if (l.empty()) {
-                    continue;
-                }
-                auto v = split_string(l, "|");
-                if (v.empty()) {
-                    continue;
-                }
-                if (false
-                    || v[0].contains('{')
-                    || v[0].contains('#')
-                    || v[0].contains('(')
-                    || v[0].contains('<')
-                    ) {
-                    continue;
-                }
-                boost::trim(v[0]);
-                links.insert(v[0]);
+        for (auto &&l : find_text_between(source, "[["sv, "]]"sv)) {
+            if (l.empty()) {
+                continue;
             }
-        };
-        f("[["sv, "]]"sv);
-        //f("{{"sv, "}}"sv);
+            auto v = split_string(l, "|");
+            if (v.empty()) {
+                continue;
+            }
+            auto &link = v[0];
+            if (false
+                || link.contains('{')
+                || link.contains('#')
+                || link.contains('(')
+                || link.contains('<')
+                ) {
+                continue;
+            }
+            boost::trim(link);
+            links.insert(link);
+        }
+
+        // actually there is no visible mapping between link or link text and pages
+        // see https://en.cppreference.com/w/c/23 and <stdnoreturn.h> for this
+        // it leads to https://en.cppreference.com/w/c/language/_Noreturn instead
+        for (auto &&l : find_text_between(source, "{{"sv, "}}"sv)) {
+            if (l.empty()) {
+                continue;
+            }
+            auto v = split_string(l, "|");
+            if (v.size() < 2) {
+                continue;
+            }
+            auto &func = v[0];
+            boost::trim(func);
+            if (!(false
+                || func.starts_with("dsc"sv)
+                || func.starts_with("ltt"sv) // type
+                || func.starts_with("ltf"sv) // function
+                || func.starts_with("lc"sv)
+                || func.starts_with("lt"sv)
+                || func.starts_with("ls"sv)
+                || func.starts_with("tt"sv) // type
+                || func.starts_with("header"sv)
+                || func.starts_with("attr"sv)
+                )) {
+                continue;
+            }
+            auto &link = v[1];
+            boost::trim(link);
+            boost::replace_all(link, "dsc ", "");
+            if (false
+                || link.contains('{')
+                || link.contains('#')
+                || link.contains('(')
+                || link.contains('<')
+                ) {
+                continue;
+            }
+            if (func == "attr") {
+                if (is_c_page()) {
+                    link = "c/language/attributes/" + link;
+                }
+                if (is_cpp_page()) {
+                    link = "cpp/language/attributes/" + link;
+                }
+            }
+            if (func == "header") {
+                if (is_c_page()) {
+                    link = "c/header/" + link;
+                }
+                if (is_cpp_page()) {
+                    link = "cpp/header/" + link;
+                }
+            }
+            links.insert(link);
+        }
     }
+    bool is_c_page() const { return name.starts_with("c/"); }
+    bool is_cpp_page() const { return name.starts_with("cpp/"); }
 };
 
 struct parser {
@@ -194,6 +250,20 @@ struct parser {
             || pagename.starts_with("User")
             //|| pagename.starts_with("User talk") // we skip all users
             || pagename.starts_with("File")
+            // langs
+            || pagename.starts_with("ar:")
+            || pagename.starts_with("cs:")
+            || pagename.starts_with("de:")
+            || pagename.starts_with("es:")
+            || pagename.starts_with("fr:")
+            || pagename.starts_with("it:")
+            || pagename.starts_with("ja:")
+            || pagename.starts_with("ko:")
+            || pagename.starts_with("pl:")
+            || pagename.starts_with("pt:")
+            || pagename.starts_with("ru:")
+            || pagename.starts_with("tr:")
+            || pagename.starts_with("zh:")
             ) {
             return;
         }
@@ -205,6 +275,7 @@ struct parser {
         auto db_page_i = db_page_sel.begin();
         if (db_page_i != db_page_sel.end()) {
             page p;
+            p.name = pagename;
             auto &db_p = *db_page_i;
             p.source = db_p.source;
             p.parse_links();
@@ -225,7 +296,7 @@ struct parser {
 
         std::println("parsing {}", pagename);
         try {
-            auto &&[it, _] = pages.emplace(pagename, make_edit_page_url(pagename));
+            auto &&[it, _] = pages.emplace(pagename, page{pagename,make_edit_page_url(pagename)});
             auto &p = it->second;
 
             auto tr = db.scoped_transaction();
