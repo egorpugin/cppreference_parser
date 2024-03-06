@@ -54,7 +54,7 @@ auto make_normal_page_url(auto &&page) {
     return std::format("{}/{}/{}", make_base_url(), normal_page, page);
 }
 
-auto db_fb() {
+auto db_fn() {
     return path{mirror_root_dir} += "2.db";
 }
 auto tidy_html(auto &&s) {
@@ -117,7 +117,7 @@ struct page {
 };
 
 struct parser {
-    primitives::sqlite::sqlitemgr db{db_fb()};
+    primitives::sqlite::sqlitemgr db{db_fn()};
     std::map<std::string, page> pages;
 
     parser() {
