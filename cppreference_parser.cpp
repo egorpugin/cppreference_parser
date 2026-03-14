@@ -13,6 +13,8 @@ deps:
 
 // also see https://github.com/PeterFeicht/cppreference-doc
 
+#include "cpp.h"
+
 #include <pugixml.hpp>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
@@ -168,8 +170,201 @@ struct parser {
     }
 };
 
-int main(int argc, char *argv[]) {
+void parse() {
     parser p;
     p.start();
+}
+
+struct html_page {
+    pugi::xml_document doc;
+
+    html_page(const ::db::parser::schema::tables_::page &p) {
+        auto &page = p.source.value;
+        if (!doc.load_buffer(page.data(), page.size())) {
+            std::println("cannot read xml {}", p.name.value);
+            throw;
+        }
+    }
+
+    static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
+        return n.select_node(("//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
+    }
+    static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
+        return n.select_nodes(("//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
+    }
+    auto find_node(auto &&attrname, auto &&idname) {
+        return find_node(doc, attrname, idname);
+    }
+    std::string value(auto &&attrname, auto &&idname) {
+        auto n = find_node(attrname, idname);
+        return n ? std::string{n.node().text().as_string()} : std::string{};
+    }
+    std::string extract_by_id(auto &&attrname, auto &&idname) {
+        auto n = find_node(attrname, idname);
+        if (!n) {
+            return {};
+        }
+        n.node().print(std::cout, " ");
+        int a = 5;
+        a++;
+        return {};
+    }
+
+    auto find_navbar() {
+        return find_node("class", "t-navbar");
+    }
+    auto find_navbar_heads(auto &&n) {
+        return n.select_nodes("./*[contains(@class, 't-navbar-head')]");
+    }
+    auto find_navbar_menu(auto &&n) {
+        return n.select_node("./*[contains(@class, 't-navbar-menu')]");
+    }
+    auto find_navbar_rows(auto &&n) {
+        return n.select_nodes("./div/div/table/tr");
+    }
+    auto find_navbar_rows2(auto &&n) {
+        return n.select_nodes("./td/div/table/tr");
+    }
+    auto find_navbar_cols(auto &&n) {
+        return n.select_nodes("./td");
+    }
+    auto find_a(auto &&n) {
+        return n.select_node(".//a");
+    }
+    auto find_strong(auto &&n) {
+        return n.select_node(".//strong");
+    }
+
+    void parse(cpp_reference::page &p) {
+        p.title = value("id", "firstHeading");
+        //extract_by_id("id", "bodyContent");
+        extract_by_id("id", "mw-content-text");
+    }
+    void parse(cpp_reference::compiler_support &p) {
+        //extract_by_id("id", "bodyContent");
+    }
+    void parse(cpp_reference::c_language_standard_page &p) {
+    }
+    void parse(cpp_reference::page_raw &p) {
+        p.title = value("id", "firstHeading");
+
+        if (auto nb = find_navbar()) {
+            for (auto &&hn : find_navbar_heads(nb.node())) {
+                auto &n = p.navbars.emplace_back();
+                if (auto nbm = find_navbar_menu(hn.node())) {
+                    for (auto &&r : find_navbar_rows(nbm.node())) {
+                        auto f = [&](this auto &&f, auto &&r) -> void {
+                            constexpr auto usual_row = "t-nv"sv;
+                            constexpr auto subtable_heading1 = "t-nv-h1"sv;
+                            constexpr auto subtable_heading2 = "t-nv-h2"sv;
+                            constexpr auto subtable = "t-nv-col-table"sv;
+                            auto extract_text = [](auto &&n) {
+                                std::string full_text;
+                                for (const auto &item : n.select_nodes(".//text()")) {
+                                    full_text += item.node().value() + "\n"s;
+                                }
+                                boost::trim(full_text);
+                                return full_text;
+                            };
+                            auto extract = [&](auto &&o, auto &&a) {
+                                o.name = extract_text(a);
+                                o.href = a.attribute("href").as_string();
+                            };
+                            auto add_link_from_td = [&](auto &&r) {
+                                for (auto &&s : find_navbar_cols(r)) {
+                                    if (auto a = find_a(s.node())) {
+                                        extract(n.items.emplace_back(), a.node());
+                                    } else if (auto a = find_strong(s.node())) {
+                                        n.items.emplace_back(extract_text(a.node()));
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                            };
+                            std::string_view c = r.node().attribute("class").as_string();
+                            if (c == usual_row) {
+                                add_link_from_td(r.node());
+                            } else if (c == subtable_heading1) {
+                                if (auto a = find_a(r.node())) {
+                                    extract(n.items.emplace_back(), a.node());
+                                } else {
+                                    add_link_from_td(r.node());
+                                }
+                            } else if (c == subtable_heading2) {
+                                if (auto a = find_a(r.node())) {
+                                    extract(n.items.emplace_back(), a.node());
+                                } else {
+                                    add_link_from_td(r.node());
+                                }
+                            } else if (c == subtable) {
+                                for (auto &&r2 : find_navbar_rows2(r.node())) {
+                                    f(r2);
+                                }
+                            } else {
+                                return;
+                            }
+                        };
+                        f(r);
+                    }
+                }
+            }
+        }
+
+        auto contents = find_node("id", "mw-content-text");
+        auto n = contents.node().first_child();
+        while (n) {
+            auto cl = n.attribute("class").as_string();
+            if (0) {
+            } else if (cl == "t-dcl-begin"sv) {
+            } else if (cl == "t-dcl-begin"sv) {
+            } else {
+                throw;
+            }
+            n = n.next_sibling();
+        }
+    }
+};
+
+
+void pages_to_cpp() {
+    cppreference_website w;
+    primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
+    for (auto &&p : db.select<::db::parser::schema::tables_::page>()) {
+        auto &n = p.name.value;
+        if (n != "cpp/memory/voidify"sv) {
+            continue;
+        }
+        std::println("{}", n);
+
+        html_page page{ p };
+        cpp_reference::page_raw pr;
+        page.parse(pr);
+        w.pages[pr.title] = pr;
+        continue;
+
+
+
+        //std::optional<cppreference_objects::variant_type> obj;
+        //cppreference_objects::for_each([&]<typename T>(T**){
+        //    if (T::is(n)) {
+        //        obj = T{};
+        //        page.parse(std::get<T>(*obj));
+        //    }
+        //});
+        //if (!obj) {
+        //    cpp_reference::page p;
+        //    page.parse(p);
+        //    continue;
+        //}
+        //if (!obj) {
+        //    cpp_reference::page p;
+        //    page.parse(p);
+        //    continue;
+        //}
+    }
+}
+
+int main(int argc, char *argv[]) {
+    pages_to_cpp();
     return 0;
 }
