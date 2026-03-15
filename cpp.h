@@ -179,11 +179,16 @@ struct cppreference_website {
         auto dblnl = "\n\n"s;
 
         auto make_tex_string = [](auto &&in) {
-            std::string s{in};
+            std::string s{ in };
+            boost::replace_all(s, "\\", "\\textbackslash");
             boost::replace_all(s, "_", "\\_");
+            boost::replace_all(s, "$", "\\$");
             boost::replace_all(s, "&", "\\&");
             boost::replace_all(s, "^", "\\^");
             boost::replace_all(s, "#", "\\#");
+            boost::replace_all(s, "{", "\\{");
+            boost::replace_all(s, "}", "\\}");
+            boost::replace_all(s, "%", "\\%");
             return s;
             };
         auto tex_command = [&](auto &&n, auto &&...args) {
@@ -210,7 +215,7 @@ struct cppreference_website {
         s += tex_command("tableofcontents") + dblnl;
         s += newpage();
         for (int i{}; auto &&[_, p] : pages) {
-            auto fn = std::format("gen/{}.tex", i++);
+            auto fn = std::format("gen/{:06}.tex", i++);
             {
             std::string s;
             s += tex_command("section", p.title) + dblnl;
@@ -221,10 +226,11 @@ struct cppreference_website {
                     s += make_tex_string(d.d) + dblnl;
                 }
             }
-            s += std::format("{}", make_tex_string(p.all_text));
+            s += std::format("{}", make_tex_string(p.all_text)) + dblnl;
+            s += newpage();
             write_file(fn, s);
             }
-            s += tex_command("input", fn);
+            s += tex_command("input", fn) + dblnl;
         }
         s += end("document") + "\n";
         return s;
