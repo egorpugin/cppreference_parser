@@ -209,6 +209,26 @@ struct html_page {
         a++;
         return {};
     }
+    static auto extract_text(auto &&n) {
+        std::string full_text;
+        for (const auto &item : n.select_nodes(".//text()")) {
+            full_text += item.node().value() + "\n"s;
+        }
+        boost::trim(full_text);
+        return full_text;
+    }
+    static std::string extract_text2(auto &&n) {
+        std::string s;
+        for (auto &&c : n.children()) {
+            if (c.type() == pugi::node_pcdata) {
+                s += c.value();
+            } else if (c.type() == pugi::node_element) {
+                s += extract_text2(c);
+            }
+        }
+        boost::trim(s);
+        return s;
+    }
 
     auto find_navbar() {
         return find_node("class", "t-navbar");
@@ -234,6 +254,13 @@ struct html_page {
     auto find_strong(auto &&n) {
         return n.select_node(".//strong");
     }
+    auto find_table_rows(auto &&n) {
+        return n.select_nodes(".//tr");
+    }
+    static auto get_classes(auto &&n) {
+        std::string_view cl = n.attribute("class").as_string();
+        return std::set{std::from_range, cl | std::views::split(' ') | std::views::transform([](auto &&v){return std::string_view{v};})};
+    }
 
     void parse(cpp_reference::page &p) {
         p.title = value("id", "firstHeading");
@@ -245,81 +272,158 @@ struct html_page {
     }
     void parse(cpp_reference::c_language_standard_page &p) {
     }
-    void parse(cpp_reference::page_raw &p) {
-        p.title = value("id", "firstHeading");
-
-        if (auto nb = find_navbar()) {
-            for (auto &&hn : find_navbar_heads(nb.node())) {
-                auto &n = p.navbars.emplace_back();
-                if (auto nbm = find_navbar_menu(hn.node())) {
-                    for (auto &&r : find_navbar_rows(nbm.node())) {
-                        auto f = [&](this auto &&f, auto &&r) -> void {
-                            constexpr auto usual_row = "t-nv"sv;
-                            constexpr auto subtable_heading1 = "t-nv-h1"sv;
-                            constexpr auto subtable_heading2 = "t-nv-h2"sv;
-                            constexpr auto subtable = "t-nv-col-table"sv;
-                            auto extract_text = [](auto &&n) {
-                                std::string full_text;
-                                for (const auto &item : n.select_nodes(".//text()")) {
-                                    full_text += item.node().value() + "\n"s;
-                                }
-                                boost::trim(full_text);
-                                return full_text;
+    void parse_navbar(cpp_reference::page_raw &p, auto &&n) {
+        for (auto &&hn : find_navbar_heads(n)) {
+            auto &n = p.navbars.emplace_back();
+            if (auto nbm = find_navbar_menu(hn.node())) {
+                for (auto &&r : find_navbar_rows(nbm.node())) {
+                    auto f = [&](this auto &&f, auto &&r) -> void {
+                        constexpr auto usual_row = "t-nv"sv;
+                        constexpr auto subtable_heading1 = "t-nv-h1"sv;
+                        constexpr auto subtable_heading2 = "t-nv-h2"sv;
+                        constexpr auto subtable = "t-nv-col-table"sv;
+                        auto extract = [&](auto &&o, auto &&a) {
+                            o.name = extract_text(a);
+                            o.href = a.attribute("href").as_string();
                             };
-                            auto extract = [&](auto &&o, auto &&a) {
-                                o.name = extract_text(a);
-                                o.href = a.attribute("href").as_string();
-                            };
-                            auto add_link_from_td = [&](auto &&r) {
-                                for (auto &&s : find_navbar_cols(r)) {
-                                    if (auto a = find_a(s.node())) {
-                                        extract(n.items.emplace_back(), a.node());
-                                    } else if (auto a = find_strong(s.node())) {
-                                        n.items.emplace_back(extract_text(a.node()));
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                            };
-                            std::string_view c = r.node().attribute("class").as_string();
-                            if (c == usual_row) {
-                                add_link_from_td(r.node());
-                            } else if (c == subtable_heading1) {
-                                if (auto a = find_a(r.node())) {
+                        auto add_link_from_td = [&](auto &&r) {
+                            for (auto &&s : find_navbar_cols(r)) {
+                                if (auto a = find_a(s.node())) {
                                     extract(n.items.emplace_back(), a.node());
+                                } else if (auto a = find_strong(s.node())) {
+                                    n.items.emplace_back(extract_text(a.node()));
                                 } else {
-                                    add_link_from_td(r.node());
+                                    continue;
                                 }
-                            } else if (c == subtable_heading2) {
-                                if (auto a = find_a(r.node())) {
-                                    extract(n.items.emplace_back(), a.node());
-                                } else {
-                                    add_link_from_td(r.node());
-                                }
-                            } else if (c == subtable) {
-                                for (auto &&r2 : find_navbar_rows2(r.node())) {
-                                    f(r2);
-                                }
-                            } else {
-                                return;
                             }
+                            };
+                        std::string_view c = r.node().attribute("class").as_string();
+                        if (c == usual_row) {
+                            add_link_from_td(r.node());
+                        } else if (c == subtable_heading1) {
+                            if (auto a = find_a(r.node())) {
+                                extract(n.items.emplace_back(), a.node());
+                            } else {
+                                add_link_from_td(r.node());
+                            }
+                        } else if (c == subtable_heading2) {
+                            if (auto a = find_a(r.node())) {
+                                extract(n.items.emplace_back(), a.node());
+                            } else {
+                                add_link_from_td(r.node());
+                            }
+                        } else if (c == subtable) {
+                            for (auto &&r2 : find_navbar_rows2(r.node())) {
+                                f(r2);
+                            }
+                        } else {
+                            return;
+                        }
                         };
-                        f(r);
-                    }
+                    f(r);
                 }
             }
         }
+    }
+    void parse_table_decl(cpp_reference::page_raw &p, auto &&n) {
+        for (auto &&tr : find_table_rows(n)) {
+            auto cls = get_classes(tr.node());
+            if (0) {
+            } else if (cls.contains("t-dsc-header"sv)) { // top header
+                p.declarations.head = extract_text2(tr.node());
+            } else if (cls.contains("t-dcl-h"sv)) { // intermediate header
+                auto &b = p.declarations.decls.emplace_back();
+                b.section_head = extract_text2(tr.node());
+            } else if (cls.contains("t-dcl"sv)) {
+                auto &b = p.declarations.back().decls.emplace_back();
+                for (auto &&cl : cls) {
+                    if (cl.starts_with("t-until"sv)) {
+                        b.standards.emplace_back(cl);
+                    } else if (cl.starts_with("t-since"sv)) {
+                        b.standards.emplace_back(cl);
+                    }
+                }
+                auto decl = tr.node().select_node("./td[1]");
+                b.d = extract_text2(decl.node());
+            } else if (cls.contains("t-dcl-rev-aux"sv)) {
+                continue;
+            }
+            p.all_text += extract_text2(tr.node()) + "\n";
+        }
+    }
+    void parse(cpp_reference::page_raw &p) {
+        p.title = boost::trim_copy(value("id", "firstHeading"));
 
         auto contents = find_node("id", "mw-content-text");
         auto n = contents.node().first_child();
         while (n) {
             auto cl = n.attribute("class").as_string();
+            auto cls = get_classes(n);
             if (0) {
-            } else if (cl == "t-dcl-begin"sv) {
-            } else if (cl == "t-dcl-begin"sv) {
+            } else if (n.name() == "h1"sv) {
+            } else if (n.name() == "h2"sv) {
+            } else if (n.name() == "h3"sv) {
+            } else if (n.name() == "h4"sv) {
+            } else if (n.name() == "h5"sv) {
+            } else if (n.name() == "h6"sv) {
+            } else if (n.name() == "div"sv) {
+            } else if (n.name() == "table"sv) {
+            //} else if (n.name() == "table"sv || n.name() == "div"sv) {
+            } else if (n.name() == "ul"sv) {
+            } else if (n.name() == "dl"sv) {
+            } else if (n.name() == "ol"sv) {
+            } else if (n.name() == "pre"sv) {
+            } else if (n.name() == "code"sv) {
+            } else if (n.name() == "sup"sv) {
+            } else if (n.name() == "span"sv) {
+            } else if (n.name() == "a"sv) {
+            } else if (n.name() == "i"sv) {
+            } else if (n.name() == "br"sv) {
+            } else if (n.name() == "hr"sv) {
+            } else if (n.name() == "blockquote"sv) {
+            } else if (n.name() == "p"sv) {
+                //std::println("{}", extract_text2(n));
+            } else if (n.name() == ""sv) { // ?
             } else {
-                throw;
+                std::println("unknown tag {}", n.name());
             }
+
+            if (0) {
+            } else if (cls.contains("t-navbar"sv)) {
+                parse_navbar(p, n);
+            } else if (cls.contains("t-dcl-begin"sv)) { // declaration
+                parse_table_decl(p, n);
+            } else if (cls.contains("t-par-begin"sv)) { // parameters
+                parse_table_decl(p, n);
+            } else if (cls.contains("t-rev-begin"sv)) { // return value
+                parse_table_decl(p, n);
+            } else if (cls.contains("t-dsc-begin"sv)) { // see also
+                parse_table_decl(p, n);
+            } else if (cls.contains("t-example"sv)) { // example?
+                parse_table_decl(p, n);
+            } else if (cls.contains("t-sdsc-begin"sv)) { // ?
+                parse_table_decl(p, n);
+            } else if (cls.contains("dsctable"sv)) { // defect reports
+            } else if (cls.contains("references"sv)) { //
+            } else if (cls.contains("eq-fun-cpp-table"sv)) { // ?
+            } else if (cls.contains("toc"sv)) { // (almost) always hidden
+            } else if (cls.contains("metadata"sv)) { // not needed?
+            } else if (cls.contains("wikitable"sv)) { // not needed?
+            } else if (cls.contains("mainpagetable"sv)) { // not needed?
+            } else if (cls.contains("plainlinks"sv)) { // prob some info pages?
+            } else if (cls.contains("t-template-editlink"sv)) { //
+            } else if (cls.contains("mw-geshi"sv)) { // ?
+            } else if (cls.contains("t-li1"sv)) { // ?
+            } else if (cls.contains("t-ref-std-c89"sv)) {
+            } else if (cls.contains("t-ref-std-c99"sv)) {
+            } else if (cls.contains("t-ref-std-11"sv)) {
+            } else if (cls.contains("t-ref-std-17"sv)) {
+            } else if (cls.contains("t-ref-std-23"sv)) {
+            } else if (cl == ""sv) {
+            } else {
+                //std::println("unknown table {}", cl);
+            }
+
             n = n.next_sibling();
         }
     }
@@ -329,15 +433,17 @@ struct html_page {
 void pages_to_cpp() {
     cppreference_website w;
     primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
+    std::println("parsing...");
     for (auto &&p : db.select<::db::parser::schema::tables_::page>()) {
         auto &n = p.name.value;
-        if (n != "cpp/memory/voidify"sv) {
-            continue;
+        if (n != "cpp/memory/new/operator_delete"sv) {
+            //continue;
         }
-        std::println("{}", n);
+        //std::println("{}", n);
 
         html_page page{ p };
         cpp_reference::page_raw pr;
+        pr.name = n;
         page.parse(pr);
         w.pages[pr.title] = pr;
         continue;
@@ -362,6 +468,11 @@ void pages_to_cpp() {
         //    continue;
         //}
     }
+
+    std::println("parsing done");
+
+    write_file("all.txt", w.print_raw());
+    write_file("all.tex", w.print_latex());
 }
 
 int main(int argc, char *argv[]) {

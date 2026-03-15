@@ -1,6 +1,7 @@
 #pragma once
 
 #include <primitives/string.h>
+#include <primitives/filesystem.h>
 
 #include <format>
 #include <string>
@@ -76,9 +77,46 @@ struct navbar {
     std::vector<item> items; // simple
 };
 struct page_raw {
+    struct header {
+        std::string value;
+    };
+    struct text {
+        std::string value;
+    };
+    struct table {
+
+    };
+    using paragraph = std::variant<header, text, table>;
+    struct declarations_type {
+        struct decl {
+            std::string d;
+            int number{};
+            std::vector<std::string> standards;
+        };
+        struct decl_list {
+            std::string section_head;
+            std::vector<decl> decls;
+
+            bool empty() const {return section_head.empty() && decls.empty();}
+            auto &back() {
+                return decls.empty() ? decls.emplace_back() : decls.back();
+            }
+        };
+        std::string head;
+        std::vector<decl_list> decls;
+
+        auto &back() {
+            return decls.empty() ? decls.emplace_back() : decls.back();
+        }
+    };
+
     //location l;
+    std::string name;
     std::string title;
     std::vector<navbar> navbars;
+    declarations_type declarations;
+
+    std::string all_text;
 };
 
 // non language entity
@@ -129,4 +167,66 @@ using cppreference_objects = type_list<
 
 struct cppreference_website {
     std::map<std::string, cpp_reference::page_raw> pages;
+
+    auto print_raw() const {
+        std::string s;
+        for (auto &&[_,p] : pages) {
+            s += std::format("{}", p.all_text);
+        }
+        return s;
+    }
+    auto print_latex() const {
+        auto dblnl = "\n\n"s;
+
+        auto make_tex_string = [](auto &&in) {
+            std::string s{in};
+            boost::replace_all(s, "_", "\\_");
+            boost::replace_all(s, "&", "\\&");
+            boost::replace_all(s, "^", "\\^");
+            boost::replace_all(s, "#", "\\#");
+            return s;
+            };
+        auto tex_command = [&](auto &&n, auto &&...args) {
+            auto s = std::format("\\{}", make_tex_string(n));
+            ((s += std::format("{{{}}}", make_tex_string(args))),...);
+            return s;
+            };
+        auto begin = [&](auto &&n) {
+            auto s = tex_command("begin", n);
+            return s;
+            };
+        auto end = [&](auto &&n) {
+            auto s = tex_command("end", n);
+            return s;
+            };
+        auto newpage = [&]() {
+            auto s = tex_command("newpage") + dblnl;
+            return s;
+            };
+
+        std::string s;
+        s += tex_command("documentclass"sv, "article"sv) + dblnl;
+        s += begin("document") + dblnl;
+        s += tex_command("tableofcontents") + dblnl;
+        s += newpage();
+        for (int i{}; auto &&[_, p] : pages) {
+            auto fn = std::format("gen/{}.tex", i++);
+            {
+            std::string s;
+            s += tex_command("section", p.title) + dblnl;
+            s += make_tex_string(p.declarations.head) + dblnl;
+            for (auto &&d : p.declarations.decls) {
+                s += make_tex_string(d.section_head) + dblnl;
+                for (auto &&d : d.decls) {
+                    s += make_tex_string(d.d) + dblnl;
+                }
+            }
+            s += std::format("{}", make_tex_string(p.all_text));
+            write_file(fn, s);
+            }
+            s += tex_command("input", fn);
+        }
+        s += end("document") + "\n";
+        return s;
+    }
 };

@@ -3,3 +3,10 @@
 *.db
 *.txt
 *.7z
+.build
+gen
+*.html
+*.text
+*.gz
+*.pdf
+*.tex
