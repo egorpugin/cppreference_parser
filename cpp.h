@@ -116,7 +116,7 @@ struct page_raw {
     std::vector<navbar> navbars;
     declarations_type declarations;
 
-    std::string all_text;
+    std::vector<std::string> all_text;
 };
 
 // non language entity
@@ -170,8 +170,10 @@ struct cppreference_website {
 
     auto print_raw() const {
         std::string s;
-        for (auto &&[_,p] : pages) {
-            s += std::format("{}", p.all_text);
+        for (auto &&[_, p] : pages) {
+            for (auto &&t : p.all_text) {
+                s += std::format("{}\n\n", t);
+            }
         }
         return s;
     }
@@ -221,12 +223,14 @@ struct cppreference_website {
             s += tex_command("section", p.title) + dblnl;
             s += make_tex_string(p.declarations.head) + dblnl;
             for (auto &&d : p.declarations.decls) {
-                s += make_tex_string(d.section_head) + dblnl;
+                s += tex_command("textbf", d.section_head) + dblnl;
                 for (auto &&d : d.decls) {
-                    s += make_tex_string(d.d) + dblnl;
+                    s += tex_command("texttt"sv, d.d) + dblnl;
                 }
             }
-            s += std::format("{}", make_tex_string(p.all_text)) + dblnl;
+            for (auto &&t : p.all_text) {
+                s += std::format("{}", make_tex_string(t)) + dblnl;
+            }
             s += newpage();
             write_file(fn, s);
             }
