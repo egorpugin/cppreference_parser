@@ -1,15 +1,5 @@
-/*
-c++: 23
-package_definitions: true
-deps:
-    - pub.egorpugin.primitives.http
-    - pub.egorpugin.primitives.templates2
-    - pub.egorpugin.primitives.sw.main
-    - org.sw.demo.zeux.pugixml
-    - org.sw.demo.htacg.tidy_html5
-    - org.sw.demo.sqlite3
-    - org.sw.demo.boost.pfr
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2024-2026 Egor Pugin <egor.pugin@gmail.com>
 
 // also see https://github.com/PeterFeicht/cppreference-doc
 
@@ -533,6 +523,9 @@ void pages_to_cpp() {
             }
             n = n.substr(n.find(w) + w.size());
         }
+        if (n != "cpp/utility/expected"sv) {
+            continue;
+        }
         if (n != "cpp/memory/new/operator_delete"sv) {
             //continue;
         }
@@ -570,6 +563,7 @@ void pages_to_cpp() {
 
     write_file("all.txt", w.print_raw());
     write_file("all.tex", w.print_latex());
+    write_file("all.json", w.print_json());
 }
 
 int main(int argc, char *argv[]) {

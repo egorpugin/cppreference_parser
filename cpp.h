@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2024-2026 Egor Pugin <egor.pugin@gmail.com>
+
 #pragma once
 
 #include <primitives/string.h>
@@ -237,6 +240,11 @@ struct cppreference_website {
             s += tex_command("input", fn) + dblnl;
         }
         s += end("document") + "\n";
+        return s;
+    }
+    auto print_json() const {
+        // use glaze lib
+        std::string s;
         return s;
     }
 };
