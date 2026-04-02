@@ -5,16 +5,15 @@
 
 #include "cpp.h"
 
-#include <pugixml.hpp>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
 #include <primitives/templates2/sqlite.h>
 #include <primitives/templates2/xml.h>
-#include <tidy.h>
-#include <tidybuffio.h>
 
+#include <algorithm>
 #include <format>
 #include <print>
+#include <ranges>
 
 namespace db::parser {
 
@@ -66,7 +65,9 @@ struct page {
     std::set<std::string> links;
 
     page() = default;
-    page(const std::string &url) : url{url}, source{tidy_html(download_url(url))} {
+    page(const std::string &url) : url{url} {
+        source = download_url(url);
+        source = tidy_html(source);
         parse_links();
     }
     bool is_c_page() const {
@@ -96,7 +97,8 @@ struct page {
                     continue;
                 }
                 l = l.substr(0, l.find('#')); // take everything before '#'
-                l = l.substr(0, l.find('%')); // take everything before '%'
+                l = l.substr(0, l.find('?')); // take everything before '?'
+                //l = l.substr(0, l.find('%')); // take everything before '%', no it is valid
                 if (l.ends_with(".html"sv)) {
                     l = l.substr(0, l.size() - 5);
                 }
@@ -164,7 +166,8 @@ struct page {
 };
 
 struct parser {
-    primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += "_03.2026.db"};
+    primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += ".db"};
+    //primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += "_03.2026.db"};
     std::map<std::string, page> pages;
     std::set<std::string> bad_pages;
 
@@ -205,6 +208,16 @@ struct parser {
             return;
         }
 
+        if (false
+            || pagename.starts_with("https://en.cppreference.com/w/Cppreference"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/Talk"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/Category"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/File"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/ftp:"sv)
+            ) {
+            return;
+        }
+
         std::println("parsing {}", pagename);
         try {
             auto &&[it, _] = pages.emplace(pagename, page{make_normal_page_url(pagename)});
@@ -237,10 +250,10 @@ struct html_page {
     }
 
     static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
-        return n.select_node(("//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
+        return n.select_node((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
     }
     static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
-        return n.select_nodes(("//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
+        return n.select_nodes((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
     }
     auto find_node(auto &&attrname, auto &&idname) {
         return find_node(doc, attrname, idname);
@@ -407,14 +420,344 @@ struct html_page {
         }
         p.all_text.emplace_back(s);
     }
+
+    struct cpp_traverser : pugi::xml_tree_walker {
+        enum class state_type {
+            navbar,
+            navbar_head,
+            navbar_sep,
+            navbar_menu,
+            navbar_menu_elements_begin, // <table> tag
+            navbar_menu_element,
+            navbar_menu_element_header1, // table col subhead (slightly indented)
+            navbar_menu_element_header2, // table col subhead (slightly indented)
+            navbar_menu_element_column_table,
+            navbar_menu_element_inline_table, // inside col table
+
+            t_rev_begin, // rev table
+            revision,
+            revision_inline,
+            revision_inline_noborder,
+            mark_revision,
+            mark_object_type,
+
+            noprint,
+            editsection,
+            ignore,
+            selflink, // bold text (reference) to this page
+            mw_headline, // (sub)title line
+            lines, // just some text?
+            wikitable,
+            source_cpp,
+            small_text, // _in_table?
+
+            ambox, // some boxes like ambox-notice
+            mbox_text,
+            mbox_empty_cell,
+
+            example,
+            example_live_link,
+
+            mw_geshi, // mediawiki highlight (code)
+
+            lc, // monofont or link? or cite like cell?
+
+            // usual table
+            t_dsc_begin,
+            t_dsc_header, // usually defined in <>
+            t_dsc, // row
+            t_dsc_member_div, // cell
+
+            // declarations table
+            t_dcl_begin,
+            t_dcl, // row
+            t_dcl_nopad, // row (no padding?)
+            t_dcl_sep,
+            t_dcl_h, // header row
+
+            t_image,
+            image,
+
+            // defect reports? compact table or maybe no style table
+            dsctable,
+
+            t_ref_std_cpp_98,
+            t_ref_std_cpp_03,
+            t_ref_std_cpp_11,
+            t_ref_std_cpp_14,
+            t_ref_std_cpp_17,
+            t_ref_std_cpp_20,
+            t_ref_std_cpp_23,
+            t_ref_std_cpp_26,
+            t_ref_std_cpp_29,
+
+            t_since_cpp11,
+            t_since_cpp14,
+            t_since_cpp17,
+            t_since_cpp20,
+            t_since_cpp23,
+            t_since_cpp26,
+
+            t_until_cpp11,
+            t_until_cpp14,
+            t_until_cpp17,
+            t_until_cpp20,
+            t_until_cpp23,
+            t_until_cpp26,
+
+            t_ref_std_c89,
+            t_ref_std_c99,
+            t_ref_std_11,
+            t_ref_std_17,
+            t_ref_std_23,
+
+            t_since_c95,
+            t_since_c99,
+            t_since_c11,
+            t_since_c17,
+            t_since_c23,
+
+            t_until_c95,
+            t_until_c99,
+            t_until_c11,
+            t_until_c17,
+            t_until_c23,
+
+            t_member,
+            t_page_template,
+
+            table_yes, // green
+            table_no, // red
+            table_maybe, // yellow
+            table_na, // gray
+        };
+        enum class action_type {
+            process,
+            text,
+            ignore,
+        };
+        struct state_desc {
+            state_type t;
+            action_type a{ action_type::process };
+        };
+        struct state : state_desc {
+            int d;
+            pugi::xml_node n;
+        };
+        std::vector<state> st;
+        state last_removed{};
+
+        cpp_reference::page_raw &p;
+        std::map<std::string, state_desc> known_classes;
+
+        cpp_traverser(cpp_reference::page_raw &p) : p{p}{
+            known_classes["t-navbar"] = {state_type::navbar};
+            known_classes["t-navbar-head"] = {state_type::navbar_head};
+            known_classes["t-navbar-menu"] = {state_type::navbar_menu};
+            known_classes["t-navbar-sep"] = {state_type::navbar_sep};
+            known_classes["t-nv"] = {state_type::navbar_menu_element};
+            known_classes["t-nv-begin"] = {state_type::navbar_menu_elements_begin};
+            known_classes["t-nv-h1"] = {state_type::navbar_menu_element_header1};
+            known_classes["t-nv-h2"] = {state_type::navbar_menu_element_header2};
+            known_classes["t-nv-col-table"] = {state_type::navbar_menu_element_column_table};
+            known_classes["t-nv-ln-table"] = {state_type::navbar_menu_element_inline_table};
+
+            known_classes["t-rev-begin"] = { state_type::t_rev_begin };
+            known_classes["t-rev"] = {state_type::revision}; // double check
+            known_classes["t-rev-inl"] = {state_type::revision_inline}; // double check
+            known_classes["t-rev-inl-noborder"] = {state_type::revision_inline_noborder}; // double check
+            known_classes["t-mark-rev"] = {state_type::mark_revision};
+            known_classes["t-mark"] = {state_type::mark_object_type};
+
+            known_classes["t-image"] = {state_type::t_image};
+            known_classes["image"] = {state_type::image};
+
+            known_classes["t-dsc-small"] = {state_type::small_text};
+
+            // begin description table
+            known_classes["t-dsc-begin"] = {state_type::t_dsc_begin};
+            known_classes["t-dsc-header"] = {state_type::t_dsc_header};
+            known_classes["t-dsc"] = {state_type::t_dsc};
+            known_classes["t-dsc-member-div"] = {state_type::t_dsc_member_div};
+
+            known_classes["t-dcl-begin"] = { state_type::t_dcl_begin };
+            known_classes["t-dcl"] = { state_type::t_dcl };
+            known_classes["t-dcl-nopad"] = { state_type::t_dcl_nopad };
+            known_classes["t-dcl-sep"] = { state_type::t_dcl_sep };
+            known_classes["t-dcl-h"] = { state_type::t_dcl_h };
+
+            known_classes["noprint"] = {state_type::noprint, action_type::ignore};
+            known_classes["toc"] = { state_type::noprint, action_type::ignore };
+            known_classes["editsection"] = { state_type::editsection, action_type::ignore };
+            known_classes["selflink"] = { state_type::selflink };
+            known_classes["mw-headline"] = { state_type::mw_headline };
+            known_classes["wikitable"] = { state_type::wikitable };
+            known_classes["dsctable"] = { state_type::dsctable };
+
+            known_classes["source-cpp"] = { state_type::source_cpp, action_type::ignore }; // ignore contents for now
+            known_classes["t-lines"] = { state_type::lines };
+
+            known_classes["t-example"] = { state_type::example, action_type::ignore }; // ignore contents for now
+            known_classes["t-example-live-link"] = { state_type::example_live_link };
+
+            known_classes["mw-geshi"] = { state_type::mw_geshi, action_type::ignore }; // ignore contents for now
+
+            known_classes["ambox"] = { state_type::ambox };
+            known_classes["mbox-empty-cell"] = { state_type::mbox_empty_cell };
+            known_classes["mbox-text"] = { state_type::mbox_text };
+
+            known_classes["t-lc"] = { state_type::lc };
+
+            // ignored stuff
+            known_classes["external"] = { state_type::ignore, action_type::ignore };
+            //parse_navbar(p, n);
+
+            known_classes["t-ref-std-c++98"] = { state_type::t_ref_std_cpp_98 };
+            known_classes["t-ref-std-c++03"] = { state_type::t_ref_std_cpp_03 };
+            known_classes["t-ref-std-c++11"] = { state_type::t_ref_std_cpp_11 };
+            known_classes["t-ref-std-c++14"] = { state_type::t_ref_std_cpp_14 };
+            known_classes["t-ref-std-c++17"] = { state_type::t_ref_std_cpp_17 };
+            known_classes["t-ref-std-c++20"] = { state_type::t_ref_std_cpp_20 };
+            known_classes["t-ref-std-c++23"] = { state_type::t_ref_std_cpp_23 };
+            known_classes["t-ref-std-c++26"] = { state_type::t_ref_std_cpp_26 };
+            known_classes["t-ref-std-c++29"] = { state_type::t_ref_std_cpp_29 };
+
+            known_classes["t-since-cxx11"] = { state_type::t_since_cpp11 };
+            known_classes["t-since-cxx14"] = { state_type::t_since_cpp14 };
+            known_classes["t-since-cxx17"] = { state_type::t_since_cpp17 };
+            known_classes["t-since-cxx20"] = { state_type::t_since_cpp20 };
+            known_classes["t-since-cxx23"] = { state_type::t_since_cpp23 };
+            known_classes["t-since-cxx26"] = { state_type::t_since_cpp26 };
+
+            known_classes["t-until-cxx11"] = { state_type::t_until_cpp11 };
+            known_classes["t-until-cxx14"] = { state_type::t_until_cpp14 };
+            known_classes["t-until-cxx17"] = { state_type::t_until_cpp17 };
+            known_classes["t-until-cxx20"] = { state_type::t_until_cpp20 };
+            known_classes["t-until-cxx23"] = { state_type::t_until_cpp23 };
+            known_classes["t-until-cxx26"] = { state_type::t_until_cpp26 };
+
+            known_classes["t-since-c95"] = { state_type::t_since_c95 };
+            known_classes["t-since-c99"] = { state_type::t_since_c99 };
+            known_classes["t-since-c11"] = { state_type::t_since_c11 };
+            known_classes["t-since-c17"] = { state_type::t_since_c17 };
+            known_classes["t-since-c23"] = { state_type::t_since_c23 };
+
+            known_classes["t-until-c95"] = { state_type::t_until_c95 };
+            known_classes["t-until-c99"] = { state_type::t_until_c99 };
+            known_classes["t-until-c11"] = { state_type::t_until_c11 };
+            known_classes["t-until-c17"] = { state_type::t_until_c17 };
+            known_classes["t-until-c23"] = { state_type::t_until_c23 };
+
+            known_classes["t-ref-std-c89"] = { state_type::t_ref_std_c89 };
+            known_classes["t-ref-std-c99"] = { state_type::t_ref_std_c99 };
+            known_classes["t-ref-std-11"] = { state_type::t_ref_std_11 };
+            known_classes["t-ref-std-17"] = { state_type::t_ref_std_17 };
+            known_classes["t-ref-std-23"] = { state_type::t_ref_std_23 };
+
+            known_classes["table-yes"] = { state_type::table_yes };
+            known_classes["table-no"] = { state_type::table_no };
+            known_classes["table-maybe"] = { state_type::table_maybe };
+            known_classes["table-na"] = { state_type::table_na };
+        }
+
+        void pop_state() {
+            while (!st.empty() && st.back().d >= depth()) {
+                last_removed = st.back();
+                st.pop_back();
+            }
+        }
+        bool is_ignored() const {
+            return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
+        }
+        bool for_each(pugi::xml_node &n) override {
+            pop_state();
+            // some pages have <p> inside <span> which is not allowed
+            if (last_removed.d
+                && last_removed.n.name() == "span"sv
+                && n.name() == "p"sv
+                && last_removed.a == action_type::ignore
+                ) {
+                st.push_back(last_removed);
+                --st.back().d;
+                //return true;
+            }
+            if (is_ignored()) {
+                return true;
+            }
+
+            auto cl = n.attribute("class").as_string();
+            auto cls = get_classes(n);
+
+            auto check_class = [&](auto &&cl) {
+                auto r = cls.contains(cl);
+                if (r) {
+                    std::cout << cl << "\n";
+                }
+                return r;
+            };
+            auto check_classes = [&]() {
+                for (auto &&c : cls) {
+                    auto kci = known_classes.find(std::string{c});
+                    auto r = kci != known_classes.end();
+                    auto is_kw = c.starts_with("kw"sv) && c.size() > 2 && isdigit(c[2]);
+                    if (is_kw) {
+                        return true;
+                    }
+                    if (r) {
+                        st.push_back({kci->second, depth(), n});
+                        return r;
+                    }
+                }
+                return false;
+                };
+
+            if (cls.empty()) {
+                return true;
+            }
+            if (!check_classes()) {
+                static struct x {
+                    std::map<std::string, std::string> once;
+                    ~x() {
+                        for (auto &&[cl,v] : once) {
+                            std::cout << std::format("unk class: {}: {}", cl, v) << "\n";
+                        }
+                    }
+                } xx;
+                xx.once.emplace(cl, p.name);
+            }
+            return true;
+        }
+        bool end(pugi::xml_node &n) {
+            pop_state();
+            return true;
+        }
+    };
+
+    static inline std::set<std::string> heads;
+    //static std::set<std::string> heads_ids;
     void parse(cpp_reference::page_raw &p) {
         p.title = boost::trim_copy(value("id", "firstHeading"));
 
         auto contents = find_node("id", "mw-content-text");
+        cpp_traverser t{p};
+        contents.node().traverse(t);
         auto n = contents.node().first_child();
 
         auto default_text = [&]() {
             p.all_text.emplace_back(extract_text2(n));
+            };
+        auto get_head = [&]() {
+            auto n_span = find_node(n, "class", "mw-headline");
+            if (!n_span) {
+                throw;
+            }
+            auto id = n_span.node().attribute("id").as_string();
+            auto t = extract_text2(n_span.node());
+            heads.insert(t);
+            //heads_ids.insert(id);
+            p.all_text.emplace_back(t);
+            if (false) {
+            }
             };
 
         while (n) {
@@ -422,17 +765,17 @@ struct html_page {
             auto cls = get_classes(n);
             if (0) {
             } else if (n.name() == "h1"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "h2"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "h3"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "h4"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "h5"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "h6"sv) {
-                default_text();
+                get_head();
             } else if (n.name() == "div"sv) {
             } else if (n.name() == "table"sv) {
             //} else if (n.name() == "table"sv || n.name() == "div"sv) {
@@ -523,8 +866,11 @@ void pages_to_cpp() {
             }
             n = n.substr(n.find(w) + w.size());
         }
+        if (n != "cpp/utility/format"sv) {
+            //continue;
+        }
         if (n != "cpp/utility/expected"sv) {
-            continue;
+            //continue;
         }
         if (n != "cpp/memory/new/operator_delete"sv) {
             //continue;
@@ -567,7 +913,7 @@ void pages_to_cpp() {
 }
 
 int main(int argc, char *argv[]) {
-    //parse();
+    parse();
     pages_to_cpp();
     return 0;
 }
