@@ -83,93 +83,85 @@ struct page {
         if (auto r = doc.load_buffer(source.data(), source.size()); !r) {
             throw std::runtime_error{std::format("name = {}, xml parse error = {}", url.string(), r.description())};
         }
-
-        auto extract_hrefs2 = [&]() {
-            for (auto &&n : doc.select_nodes("//a[@href]")) {
-                auto a = n.node().attribute("href");
-                std::string l = a.value();
-                l = primitives::http::url_decode(l);
-                //std::println("href = {}", l);
-                if (l.starts_with("http"sv)) {
-                    continue;
-                }
-                if (l.starts_with('/')) {
-                    continue;
-                }
-                l = l.substr(0, l.find('#')); // take everything before '#'
-                l = l.substr(0, l.find('?')); // take everything before '?'
-                //l = l.substr(0, l.find('%')); // take everything before '%', no it is valid
-                if (l.ends_with(".html"sv)) {
-                    l = l.substr(0, l.size() - 5);
-                }
-                // skip uninteresting pages
-                if (l.starts_with("User"sv) || (!l.empty() && isupper(l[0]))) {
-                    continue;
-                }
-                auto u = url;
-                if (!l.starts_with("http"sv) && !l.starts_with("../"sv)) {
-                    //links.insert(l);
-                    //continue;
-                    u = u.parent_path();
-                }
-                if (l.starts_with("../"sv)) {
-                    u = u.parent_path();
-                    //if (is_c_page() || is_cpp_page()) {
-                    //    l = l.substr(3);
-                    //    continue;
-                    //}
-                    //break;
-                    //while (u.filename() != "c" && u.filename() != "cpp" && u.filename() != "w") {
-                    //    u = u.parent_path();
-                    //}
-                    //u /= "dummy_element_that_will_be_removed";
-                }
-                //auto p = url.parent_path() / l;
-                path p = u / l;
-                p = normalize_path(p);
-                p = p.lexically_normal();
-                p = normalize_path(p);
-                l = p.string();
-                if (auto p = l.find("http"sv); p != -1)
-                    l = l.substr(p);
-                if (l.starts_with("https:/"sv)) {
-                    //l = "https://" + l.substr(7);
-                    l = "https://" + l.substr(7);
-                }
-                links.insert(l);
+        for (auto &&n : doc.select_nodes("//a[@href]")) {
+            auto a = n.node().attribute("href");
+            std::string l = a.value();
+            //l = primitives::http::url_decode(l);
+            //std::println("href = {}", l);
+            if (l.starts_with("http"sv)) {
+                continue;
             }
-        };
-        extract_hrefs2();
-        return;
-
-        auto extract_hrefs = [&](auto &&xpath, int len) {
-            for (auto &&n : doc.select_nodes(xpath)) {
-                auto a = n.node().attribute("href");
-                if (a) {
-                    std::string l = a.value();
-                    if (len) {
-                        l = l.substr(len); // skip the beginning
-                    }
-                    l = l.substr(0, l.find('#')); // take everything before '#'
-                    if (l.ends_with(".html"sv)) {
-                        l = l.substr(0, l.size() - 5);
-                    }
-                    links.insert(l);
-                }
+            if (l.starts_with('/')) {
+                continue;
             }
-        };
-        extract_hrefs("//a[starts-with(@href,'/w/c')]", 3); // old (2024)
-        extract_hrefs("//a[starts-with(@href,'w/c')]", 2); // newer (2025-)
-        //extract_hrefs("//a[starts-with(@href,'c')]", 0); // newer (2025-)
-        // extract_hrefs("//a[starts-with(@href,'/w/cpp')]");
+            l = l.substr(0, l.find('#')); // take everything before '#'
+            l = l.substr(0, l.find('?')); // take everything before '?'
+            //l = l.substr(0, l.find('%')); // take everything before '%', no it is valid
+            if (l.ends_with(".html"sv)) {
+                //l = l.substr(0, l.size() - 5); // some pages cannot be opened without it
+            }
+            // skip uninteresting pages
+            /*if (l.starts_with("User"sv) || (!l.empty() && isupper(l[0]))) {
+                continue;
+            }
+            auto op_eq = "operator ="sv;
+            if (auto p = l.find(op_eq); p != -1) {
+                l.replace(p, op_eq.size(), "operator="sv);
+            }
+            {
+            auto op_eq = "operator .html"sv;
+            if (auto p = l.find(op_eq); p != -1) {
+                int a = 5;
+                a++;
+            }
+            }
+            for (auto &&p22 : {"%22"sv,"%2A"sv}) {
+                next:
+                if (auto p = l.find(p22); p != -1) {
+                    l.replace(p, p22.size(), std::format("%25{}", p22.substr(1)));
+                    goto next;
+                }
+            }*/
+            auto u = url;
+            if (!l.starts_with("http"sv) && !l.starts_with("../"sv)) {
+                //links.insert(l);
+                //continue;
+                u = u.parent_path();
+            }
+            if (l.starts_with("../"sv)) {
+                u = u.parent_path();
+                //if (is_c_page() || is_cpp_page()) {
+                //    l = l.substr(3);
+                //    continue;
+                //}
+                //break;
+                //while (u.filename() != "c" && u.filename() != "cpp" && u.filename() != "w") {
+                //    u = u.parent_path();
+                //}
+                //u /= "dummy_element_that_will_be_removed";
+            }
+            //auto p = url.parent_path() / l;
+            path p = u / l;
+            p = normalize_path(p);
+            p = p.lexically_normal();
+            p = normalize_path(p);
+            l = p.string();
+            if (auto p = l.find("http"sv); p != -1)
+                l = l.substr(p);
+            if (l.starts_with("https:/"sv)) {
+                //l = "https://" + l.substr(7);
+                l = "https://" + l.substr(7);
+            }
+            links.insert(l);
+        }
     }
 };
 
 struct parser {
     primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += ".db"};
     //primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += "_03.2026.db"};
-    std::map<std::string, page> pages;
-    std::set<std::string> bad_pages;
+    std::vector<page> pages;
+    std::set<std::string> processed_pages;
 
     parser() {
         db.create_tables(::db::parser::schema{});
@@ -177,58 +169,77 @@ struct parser {
     void start() {
         parse_page(start_page);
         while (1) {
-            auto old = pages.size();
-            for (auto &&[_, p] : pages) {
+            auto old = pages;
+            for (auto &&p : old) {
                 for (auto &&t : p.links) {
                     parse_page(t);
                 }
             }
-            if (pages.size() == old) {
+            if (pages.size() == old.size()) {
                 break;
             }
         }
     }
-    void parse_page(auto &&pagename) {
-        if (pages.contains(pagename)) {
+    void parse_page(auto pagename) {
+        if (processed_pages.contains(pagename)) {
             return;
         }
-
-        auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
-        auto db_page_i = db_page_sel.begin();
-        if (db_page_i != db_page_sel.end()) {
-            page p;
-            p.url = make_normal_page_url(pagename);
-            auto &db_p = *db_page_i;
-            p.source = db_p.source;
-            p.parse_links();
-            pages.emplace(pagename, p);
-            return;
-        }
-        if (bad_pages.contains(pagename)) {
-            return;
-        }
-
         if (false
             || pagename.starts_with("https://en.cppreference.com/w/Cppreference"sv)
             || pagename.starts_with("https://en.cppreference.com/w/Talk"sv)
             || pagename.starts_with("https://en.cppreference.com/w/Category"sv)
             || pagename.starts_with("https://en.cppreference.com/w/File"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/ftp:"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/MediaWiki"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/User"sv)
+            || pagename.starts_with("https://en.cppreference.com/w/c/ftp:"sv)
             ) {
+            processed_pages.insert(pagename);
             return;
+        }
+
+        {
+            auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
+            auto db_page_i = db_page_sel.begin();
+            if (db_page_i != db_page_sel.end()) {
+                page p;
+                p.url = make_normal_page_url(pagename);
+                auto &db_p = *db_page_i;
+                p.source = db_p.source;
+                p.parse_links();
+                pages.push_back(p);
+                processed_pages.emplace(pagename);
+                return;
+            }
+        }
+        auto _html = ".html"sv;
+        auto ends_with_html = pagename.ends_with(_html);
+        if (ends_with_html) {
+            pagename = pagename.substr(0, pagename.size() - _html.size());
+            auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
+            auto db_page_i = db_page_sel.begin();
+            if (db_page_i != db_page_sel.end()) {
+                pagename += _html;
+                page p;
+                p.url = make_normal_page_url(pagename);
+                auto &db_p = *db_page_i;
+                p.source = db_p.source;
+                p.parse_links();
+                pages.push_back(p);
+                processed_pages.emplace(pagename);
+                return;
+            }
+            pagename += _html;
         }
 
         std::println("parsing {}", pagename);
         try {
-            auto &&[it, _] = pages.emplace(pagename, page{make_normal_page_url(pagename)});
-            auto &p = it->second;
-
+            auto &p = pages.emplace_back(page{make_normal_page_url(pagename)});
             auto tr = db.scoped_transaction();
             auto page_ins = db.prepared_insert<::db::parser::schema::tables_::page, primitives::sqlite::db::or_ignore{}>();
             page_ins.insert({.name = pagename, .source = p.source});
         } catch (std::exception &e) {
             std::cerr << e.what() << "\n";
-            bad_pages.insert(pagename);
+            processed_pages.insert(pagename);
         }
     }
 };
