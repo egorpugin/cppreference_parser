@@ -5,6 +5,7 @@
 
 #include "cpp.h"
 
+#include <primitives/executor.h>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
 #include <primitives/templates2/sqlite.h>
@@ -14,6 +15,7 @@
 #include <format>
 #include <print>
 #include <ranges>
+#include <syncstream>
 
 namespace db::parser {
 
@@ -31,13 +33,26 @@ struct schema {
 
 } // namespace db::parser
 
+struct url_request_cache : primitives::sqlite::kv<std::string, std::string> {};
+static auto &cache() {
+    thread_local auto c = []() {
+        primitives::sqlite::cache <
+            url_request_cache
+        > c{ "cache.db" };
+        c.enable_wal();
+        c.set_busy_timeout(5s);
+        return c;
+        }();
+    return c;
+}
+
 const path mirror_root_dir = "cppreference";
 
 auto url_base = "cppreference.com"s;
 auto lang = "en"s;
 auto protocol = "https"s;
 auto normal_page = "w"s;
-auto start_page = "Main_Page"s;
+auto start_page = "https://en.cppreference.com/w/Main_Page.html"s;
 
 auto make_base_url() {
     return std::format("{}://{}.{}", protocol, lang, url_base);
@@ -50,17 +65,22 @@ auto make_normal_page_url(auto &&page) {
 }
 
 auto download_url(auto &&url) {
-    HttpRequest req{httpSettings};
-    req.url = url;
-    auto resp = url_request(req);
-    if (resp.http_code != 200) {
-        throw std::runtime_error{std::format("url = {}, http code = {}", url, resp.http_code)};
-    }
-    return resp.response;
+    return cache().find<url_request_cache>(url, [&]() {
+        std::osyncstream{ std::cout } << std::format("downloading {}\n", url);
+
+        HttpRequest req{ httpSettings };
+        req.url = url;
+        req.timeout = 90;
+        auto resp = url_request(req);
+        if (resp.http_code != 200) {
+            throw std::runtime_error{ std::format("url = {}, http code = {}", url, resp.http_code) };
+        }
+        return resp.response;
+    });
 }
 
 struct page {
-    path url;
+    std::string url;
     std::string source;
     std::set<std::string> links;
 
@@ -71,23 +91,19 @@ struct page {
         parse_links();
     }
     bool is_c_page() const {
-        auto u = url.string();
-        return u.contains("/w/c/"sv) || u.ends_with("/w/c"sv);
+        return url.contains("/w/c/"sv) || url.ends_with("/w/c"sv);
     }
     bool is_cpp_page() const {
-        auto u = url.string();
-        return u.contains("/w/cpp/"sv) || u.ends_with("/w/cpp"sv);
+        return url.contains("/w/cpp/"sv) || url.ends_with("/w/cpp"sv);
     }
     void parse_links() {
         pugi::xml_document doc;
         if (auto r = doc.load_buffer(source.data(), source.size()); !r) {
-            throw std::runtime_error{std::format("name = {}, xml parse error = {}", url.string(), r.description())};
+            throw std::runtime_error{std::format("name = {}, xml parse error = {}", url, r.description())};
         }
         for (auto &&n : doc.select_nodes("//a[@href]")) {
             auto a = n.node().attribute("href");
             std::string l = a.value();
-            //l = primitives::http::url_decode(l);
-            //std::println("href = {}", l);
             if (l.starts_with("http"sv)) {
                 continue;
             }
@@ -96,51 +112,13 @@ struct page {
             }
             l = l.substr(0, l.find('#')); // take everything before '#'
             l = l.substr(0, l.find('?')); // take everything before '?'
-            //l = l.substr(0, l.find('%')); // take everything before '%', no it is valid
-            if (l.ends_with(".html"sv)) {
-                //l = l.substr(0, l.size() - 5); // some pages cannot be opened without it
-            }
-            // skip uninteresting pages
-            /*if (l.starts_with("User"sv) || (!l.empty() && isupper(l[0]))) {
-                continue;
-            }
-            auto op_eq = "operator ="sv;
-            if (auto p = l.find(op_eq); p != -1) {
-                l.replace(p, op_eq.size(), "operator="sv);
-            }
-            {
-            auto op_eq = "operator .html"sv;
-            if (auto p = l.find(op_eq); p != -1) {
-                int a = 5;
-                a++;
-            }
-            }
-            for (auto &&p22 : {"%22"sv,"%2A"sv}) {
-                next:
-                if (auto p = l.find(p22); p != -1) {
-                    l.replace(p, p22.size(), std::format("%25{}", p22.substr(1)));
-                    goto next;
-                }
-            }*/
-            auto u = url;
+            path u{url};
             if (!l.starts_with("http"sv) && !l.starts_with("../"sv)) {
-                //links.insert(l);
-                //continue;
                 u = u.parent_path();
             }
             if (l.starts_with("../"sv)) {
                 u = u.parent_path();
-                //if (is_c_page() || is_cpp_page()) {
-                //    l = l.substr(3);
-                //    continue;
-                //}
-                //break;
-                //while (u.filename() != "c" && u.filename() != "cpp" && u.filename() != "w") {
-                //    u = u.parent_path();
-                //}
-                //u /= "dummy_element_that_will_be_removed";
             }
-            //auto p = url.parent_path() / l;
             path p = u / l;
             p = normalize_path(p);
             p = p.lexically_normal();
@@ -149,7 +127,6 @@ struct page {
             if (auto p = l.find("http"sv); p != -1)
                 l = l.substr(p);
             if (l.starts_with("https:/"sv)) {
-                //l = "https://" + l.substr(7);
                 l = "https://" + l.substr(7);
             }
             links.insert(l);
@@ -160,87 +137,74 @@ struct page {
 struct parser {
     primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += ".db"};
     //primitives::sqlite::sqlitemgr db{path{ mirror_root_dir } += "_03.2026.db"};
-    std::vector<page> pages;
-    std::set<std::string> processed_pages;
+    std::map<std::string, page> pages;
+    std::set<std::string> processed_pages; // including bad pages
 
     parser() {
         db.create_tables(::db::parser::schema{});
+        db.enable_wal();
+        db.set_busy_timeout(5s);
     }
     void start() {
-        parse_page(start_page);
+        Executor e{10};
+        std::mutex m;
+        std::set<std::string> pages_to_load;
+        pages_to_load.insert(start_page);
         while (1) {
-            auto old = pages;
-            for (auto &&p : old) {
-                for (auto &&t : p.links) {
-                    parse_page(t);
+            for (auto &&p : pages_to_load) {
+                e.push([&]() {
+                auto pp = parse_page(p, m);
+                if (pp.url.empty()) {
+                    return;
                 }
+                std::unique_lock lk{m};
+                pages.emplace(pp.url, pp);
+                processed_pages.insert(pp.url);
+                    });
             }
-            if (pages.size() == old.size()) {
+            e.wait();
+            decltype(pages_to_load) links;
+            for (auto &&p : pages_to_load) {
+                links.insert_range(pages[p].links);
+            }
+            std::erase_if(links, [&](auto &&t) {
+                return processed_pages.contains(t)
+                    || t.starts_with("https://en.cppreference.com/w/Cppreference"sv)
+                    || t.starts_with("https://en.cppreference.com/w/Talk"sv)
+                    || t.starts_with("https://en.cppreference.com/w/Category"sv)
+                    || t.starts_with("https://en.cppreference.com/w/File"sv)
+                    || t.starts_with("https://en.cppreference.com/w/MediaWiki"sv)
+                    || t.starts_with("https://en.cppreference.com/w/User"sv)
+                    || t.starts_with("https://en.cppreference.com/w/c/ftp:"sv)
+                    ;
+                });
+            pages_to_load = links;
+            if (pages_to_load.empty()) {
                 break;
             }
         }
     }
-    void parse_page(auto pagename) {
-        if (processed_pages.contains(pagename)) {
-            return;
-        }
-        if (false
-            || pagename.starts_with("https://en.cppreference.com/w/Cppreference"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/Talk"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/Category"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/File"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/MediaWiki"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/User"sv)
-            || pagename.starts_with("https://en.cppreference.com/w/c/ftp:"sv)
-            ) {
-            processed_pages.insert(pagename);
-            return;
-        }
-
-        {
-            auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
-            auto db_page_i = db_page_sel.begin();
-            if (db_page_i != db_page_sel.end()) {
-                page p;
-                p.url = make_normal_page_url(pagename);
-                auto &db_p = *db_page_i;
-                p.source = db_p.source;
-                p.parse_links();
-                pages.push_back(p);
-                processed_pages.emplace(pagename);
-                return;
+    page parse_page(auto &&pagename, auto &&m) {
+        page p;
+        auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
+        auto db_page_i = db_page_sel.begin();
+        if (db_page_i != db_page_sel.end()) {
+            p.url = make_normal_page_url(pagename);
+            auto &db_p = *db_page_i;
+            p.source = db_p.source;
+            p.parse_links();
+        } else {
+            try {
+                p = page{ make_normal_page_url(pagename) };
+                std::unique_lock lk{ m };
+                auto tr = db.scoped_transaction();
+                auto page_ins = db.prepared_insert < ::db::parser::schema::tables_::page, primitives::sqlite::db::or_ignore{} > ();
+                page_ins.insert({ .name = pagename, .source = p.source });
+            } catch (std::exception &e) {
+                std::cerr << e.what() << "\n";
             }
         }
-        auto _html = ".html"sv;
-        auto ends_with_html = pagename.ends_with(_html);
-        if (ends_with_html) {
-            pagename = pagename.substr(0, pagename.size() - _html.size());
-            auto db_page_sel = db.select<::db::parser::schema::tables_::page, &::db::parser::schema::tables_::page::name>(pagename);
-            auto db_page_i = db_page_sel.begin();
-            if (db_page_i != db_page_sel.end()) {
-                pagename += _html;
-                page p;
-                p.url = make_normal_page_url(pagename);
-                auto &db_p = *db_page_i;
-                p.source = db_p.source;
-                p.parse_links();
-                pages.push_back(p);
-                processed_pages.emplace(pagename);
-                return;
-            }
-            pagename += _html;
-        }
-
-        std::println("parsing {}", pagename);
-        try {
-            auto &p = pages.emplace_back(page{make_normal_page_url(pagename)});
-            auto tr = db.scoped_transaction();
-            auto page_ins = db.prepared_insert<::db::parser::schema::tables_::page, primitives::sqlite::db::or_ignore{}>();
-            page_ins.insert({.name = pagename, .source = p.source});
-        } catch (std::exception &e) {
-            std::cerr << e.what() << "\n";
-            processed_pages.insert(pagename);
-        }
+        return p;
     }
 };
 
@@ -878,7 +842,7 @@ void pages_to_cpp() {
             n = n.substr(n.find(w) + w.size());
         }
         if (n != "cpp/utility/format"sv) {
-            //continue;
+            continue;
         }
         if (n != "cpp/utility/expected"sv) {
             //continue;
@@ -924,7 +888,7 @@ void pages_to_cpp() {
 }
 
 int main(int argc, char *argv[]) {
-    parse();
+    //parse();
     pages_to_cpp();
     return 0;
 }

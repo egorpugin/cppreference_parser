@@ -5,6 +5,7 @@ void build(Solution &s) {
     parser += "cppreference_parser.cpp";
     parser += ".*\\.h"_r;
     parser +=
+        "pub.egorpugin.primitives.executor"_dep,
         "pub.egorpugin.primitives.http"_dep,
         "pub.egorpugin.primitives.templates2"_dep,
         "pub.egorpugin.primitives.sw.main"_dep,
