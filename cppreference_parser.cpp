@@ -398,6 +398,8 @@ struct html_page {
 
     struct cpp_traverser : pugi::xml_tree_walker {
         enum class state_type {
+            not_set,
+
             navbar,
             navbar_head,
             navbar_sep,
@@ -512,7 +514,7 @@ struct html_page {
             ignore,
         };
         struct state_desc {
-            state_type t;
+            state_type t{};
             action_type a{ action_type::process };
         };
         struct state : state_desc {
@@ -554,12 +556,19 @@ struct html_page {
             known_classes["t-dsc-header"] = {state_type::t_dsc_header};
             known_classes["t-dsc"] = {state_type::t_dsc};
             known_classes["t-dsc-member-div"] = {state_type::t_dsc_member_div};
+            known_classes["t-dsc-hitem"] = {};
+            known_classes["t-dsc-named-req-div"] = {};
+            known_classes["t-dsc-see"] = {};
+            known_classes["t-dsc-see-tt"] = {};
+            known_classes["t-dsc-sep"] = {};
 
             known_classes["t-dcl-begin"] = { state_type::t_dcl_begin };
             known_classes["t-dcl"] = { state_type::t_dcl };
             known_classes["t-dcl-nopad"] = { state_type::t_dcl_nopad };
             known_classes["t-dcl-sep"] = { state_type::t_dcl_sep };
             known_classes["t-dcl-h"] = { state_type::t_dcl_h };
+            known_classes["t-dcl-rev"] = {};
+            known_classes["t-dcl-rev-aux"] = {};
 
             known_classes["noprint"] = {state_type::noprint, action_type::ignore};
             known_classes["toc"] = { state_type::noprint, action_type::ignore };
@@ -585,6 +594,7 @@ struct html_page {
 
             // ignored stuff
             known_classes["external"] = { state_type::ignore, action_type::ignore };
+            known_classes["t-inheritance-diagram"] = { state_type::ignore, action_type::ignore };
             //parse_navbar(p, n);
 
             known_classes["t-ref-std-c++98"] = { state_type::t_ref_std_cpp_98 };
@@ -633,6 +643,81 @@ struct html_page {
             known_classes["table-no"] = { state_type::table_no };
             known_classes["table-maybe"] = { state_type::table_maybe };
             known_classes["table-na"] = { state_type::table_na };
+
+            // TODO:
+
+            // lists?
+            known_classes["t-li"] = {};
+            known_classes["t-li1"] = {};
+            known_classes["t-li2"] = {};
+            known_classes["t-li3"] = {};
+
+            known_classes["t-sdsc-begin"] = {};
+            known_classes["t-sdsc"] = {};
+            known_classes["t-sdsc-nopad"] = {};
+            known_classes["t-sdsc-sep"] = {};
+
+            known_classes["t-par-begin"] = {};
+            known_classes["t-par"] = {};
+            known_classes["t-par-req"] = {};
+            known_classes["t-par-hitem"] = {};
+
+            known_classes["t-plot"] = {};
+            known_classes["t-plot-bottom"] = {};
+            known_classes["t-plot-image-left"] = {};
+            known_classes["t-plot-image-left-right"] = {};
+            known_classes["t-plot-left"] = {};
+            known_classes["t-plot-right"] = {};
+
+            known_classes["t-noexcept-box"] = {};
+            known_classes["t-noexcept-full"] = {};
+            known_classes["t-noexcept-inline"] = {};
+
+            known_classes["t-page-template"] = {};
+            known_classes["t-nv-ln-named-req-table"] = {};
+            known_classes["t-su"] = {};
+            known_classes["t-v"] = {};
+            known_classes["t-vertical"] = {};
+
+            known_classes["t-mrad"] = {};
+            known_classes["t-mfrac"] = {};
+            known_classes["t-mparen"] = {};
+            known_classes["t-inherited"] = {};
+            known_classes["t-member"] = {};
+            known_classes["t-spar"] = {};
+
+            known_classes["t-c"] = {};
+            known_classes["t-cmark"] = {};
+            known_classes["t-cc"] = {};
+
+            // footnotes
+            known_classes["reference"] = {};
+            known_classes["reference-text"] = {};
+            known_classes["references"] = {};
+
+            known_classes["mw-collapsible"] = {};
+            known_classes["mw-collapsible-content"] = {};
+            known_classes["mw-redirect"] = {};
+            known_classes["mw-cite-backlink"] = {};
+
+            known_classes["texhtml"] = {};
+            known_classes["new"] = {};
+            known_classes["row"] = {};
+            known_classes["spacer"] = {};
+            known_classes["plainlinks"] = {};
+            known_classes["mainpagediv"] = {};
+            known_classes["mainpagetable"] = {};
+            known_classes["div-col"] = {};
+            known_classes["extiw"] = {};
+            known_classes["eq-fun-cpp-table"] = {};
+            known_classes["citation"] = {};
+            known_classes["t-template-editlink"] = {};
+
+            known_classes["mbox-image"] = {};
+
+            // math tex (formulas)
+            known_classes["mjax"] = {};
+            known_classes["mjax-fallback"] = {};
         }
 
         void pop_state() {
@@ -646,16 +731,6 @@ struct html_page {
         }
         bool for_each(pugi::xml_node &n) override {
             pop_state();
-            // some pages have <p> inside <span> which is not allowed
-            if (last_removed.d
-                && last_removed.n.name() == "span"sv
-                && n.name() == "p"sv
-                && last_removed.a == action_type::ignore
-                ) {
-                st.push_back(last_removed);
-                --st.back().d;
-                //return true;
-            }
             if (is_ignored()) {
                 return true;
             }
@@ -663,13 +738,13 @@ struct html_page {
             auto cl = n.attribute("class").as_string();
             auto cls = get_classes(n);
 
-            auto check_class = [&](auto &&cl) {
+            /*auto check_class = [&](auto &&cl) {
                 auto r = cls.contains(cl);
                 if (r) {
                     std::cout << cl << "\n";
                 }
                 return r;
-            };
+            };*/
             auto check_classes = [&]() {
                 for (auto &&c : cls) {
                     auto kci = known_classes.find(std::string{c});
@@ -689,8 +764,23 @@ struct html_page {
             if (cls.empty()) {
                 return true;
             }
-            if (!check_classes()) {
-                static struct x {
+            if (check_classes()) {
+                if (!st.empty()) {
+                    using enum state_type;
+                    auto &st = this->st.back();
+                    switch (st.t) {
+                    case navbar:
+                        break;
+                    case ignore:
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                int a = 5;
+                a++;
+            } else {
+                /*static struct x {
                     std::map<std::string, std::string> once;
                     ~x() {
                         for (auto &&[cl,v] : once) {
@@ -698,7 +788,7 @@ struct html_page {
                         }
                     }
                 } xx;
-                xx.once.emplace(cl, p.name);
+                xx.once.emplace(cl, p.name);*/
             }
             return true;
         }
@@ -709,7 +799,6 @@ struct html_page {
     };
 
     static inline std::set<std::string> heads;
-    //static std::set<std::string> heads_ids;
     void parse(cpp_reference::page_raw &p) {
         p.title = boost::trim_copy(value("id", "firstHeading"));
 
@@ -841,7 +930,7 @@ void pages_to_cpp() {
             }
             n = n.substr(n.find(w) + w.size());
         }
-        if (n != "cpp/utility/format"sv) {
+        if (!n.contains("cpp/utility/format"sv)) {
             continue;
         }
         if (n != "cpp/utility/expected"sv) {
