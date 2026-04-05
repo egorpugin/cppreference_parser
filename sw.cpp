@@ -9,6 +9,7 @@ void build(Solution &s) {
         "pub.egorpugin.primitives.http"_dep,
         "pub.egorpugin.primitives.templates2"_dep,
         "pub.egorpugin.primitives.sw.main"_dep,
+        "org.sw.demo.nlohmann.json.natvis"_dep,
         "org.sw.demo.zeux.pugixml"_dep,
         "pub.egorpugin.htacg.tidy_html5"_dep,
         "org.sw.demo.sqlite3"_dep,

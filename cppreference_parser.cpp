@@ -10,6 +10,7 @@
 #include <primitives/sw/main.h>
 #include <primitives/templates2/sqlite.h>
 #include <primitives/templates2/xml.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <format>
@@ -271,6 +272,17 @@ struct html_page {
         boost::trim(s);
         return s;
     }
+    static std::string extract_text3(auto &&n) {
+        std::string s;
+        if (n.type() == pugi::node_pcdata) {
+            s += n.value();
+        }
+        for (auto &&c : n.children()) {
+            s += extract_text3(c);
+        }
+        boost::trim(s);
+        return s;
+    }
 
     auto find_navbar() {
         return find_node("class", "t-navbar");
@@ -396,7 +408,7 @@ struct html_page {
         p.all_text.emplace_back(s);
     }
 
-    struct cpp_traverser : pugi::xml_tree_walker {
+    struct cpp_traverser {
         enum class state_type {
             not_set,
 
@@ -521,11 +533,21 @@ struct html_page {
             int d;
             pugi::xml_node n;
         };
+
+        struct node_wrapper : pugi::xml_node {
+            bool is(std::string_view v) const {
+                return v == name();
+            }
+        };
+
         std::vector<state> st;
         state last_removed{};
-
         cpp_reference::page_raw &p;
         std::map<std::string, state_desc> known_classes;
+        nlohmann::json j_state;
+
+        enum {full_stop, continue_, skip_children};
+        int depth{-1};
 
         cpp_traverser(cpp_reference::page_raw &p) : p{p}{
             known_classes["t-navbar"] = {state_type::navbar};
@@ -721,7 +743,7 @@ struct html_page {
         }
 
         void pop_state() {
-            while (!st.empty() && st.back().d >= depth()) {
+            while (!st.empty() && st.back().d >= depth) {
                 last_removed = st.back();
                 st.pop_back();
             }
@@ -729,22 +751,68 @@ struct html_page {
         bool is_ignored() const {
             return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
         }
-        bool for_each(pugi::xml_node &n) override {
+        bool traverse(pugi::xml_node n, auto &&this_state) {
+            auto root = n;
+            auto cur = n ? n.first_child() : n;
+            if (cur) {
+                ++depth;
+                do {
+                    auto r = for_each(cur, this_state);
+                    if (r == full_stop)
+                        return false;
+                    if (cur.first_child() && r != skip_children) {
+                        ++depth;
+                        cur = cur.first_child();
+                    } else if (cur.next_sibling())
+                        cur = cur.next_sibling();
+                    else {
+                        while (!cur.next_sibling() && cur != root && cur.parent()) {
+                            --depth;
+                            cur = cur.parent();
+                        }
+                        if (cur != root) {
+                            cur = cur.next_sibling();
+                        }
+                    }
+                } while (cur && cur != root);
+            }
+            end(root);
+            return true;
+        }
+        int for_each(pugi::xml_node &in, auto &&this_state) {
             pop_state();
             if (is_ignored()) {
                 return true;
             }
 
+#define req(x) requires {x;}
+#define ifc(x) if constexpr (x)
+#define ifcr(x) if constexpr (req(x))
+#define efc else {throw std::logic_error{"unexpected"s};}
+#define cvar(n, x) constexpr auto n##_ = req(x)
+
+#define if_json ifc(is_json##_)
+
+            cvar(is_json, this_state["ref"sv]);
+
+            node_wrapper n{in};
+
             auto cl = n.attribute("class").as_string();
             auto cls = get_classes(n);
 
-            /*auto check_class = [&](auto &&cl) {
+            auto is_tag = [&](auto &&t) {
+                return n.name() == t;
+                };
+            auto is_tag_attr = [&](auto &&t, auto &&a) {
+                //return n.name() == t;
+                };
+            auto has_class = [&](auto &&cl) {
                 auto r = cls.contains(cl);
                 if (r) {
-                    std::cout << cl << "\n";
+                    //std::cout << cl << "\n";
                 }
                 return r;
-            };*/
+            };
             auto check_classes = [&]() {
                 for (auto &&c : cls) {
                     auto kci = known_classes.find(std::string{c});
@@ -754,23 +822,79 @@ struct html_page {
                         return true;
                     }
                     if (r) {
-                        st.push_back({kci->second, depth(), n});
+                        st.push_back({kci->second, depth, n});
                         return r;
                     }
                 }
                 return false;
                 };
 
-            if (cls.empty()) {
+            // can be data only stuff
+            if (0) {
+            } else if (is_tag("a"sv)) {
+                if (auto a = n.attribute("title"sv)) {
+                    if_json{
+                        this_state["ref"sv] = a.value();
+                        this_state["text"sv] = extract_text3(n);
+                        return skip_children;
+                    } efc
+                }
                 return true;
+            } else if (is_tag("strong"sv)) {
+                if (has_class("selflink"sv)) {
+                    if_json{
+                        this_state["text"sv] = extract_text3(n);
+                        return skip_children;
+                    } efc
+                }
+                return true;
+            } else if (is_tag("p"sv)) {
+                if_json{
+                    this_state["text"sv] = extract_text3(n);
+                    return skip_children;
+                } efc
             }
+            /*if (n.type() == pugi::node_pcdata && n.children().empty()) {
+                if_json{
+                    auto t = extract_text3(n);
+                    this_state["text"sv] = t;
+                    return true;
+                }
+            }*/
+
+            //
             if (check_classes()) {
                 if (!st.empty()) {
                     using enum state_type;
                     auto &st = this->st.back();
                     switch (st.t) {
-                    case navbar:
-                        break;
+                    case navbar: {
+                        nlohmann::json j;
+                        traverse(n, j);
+                        return skip_children;
+                    }
+                    case navbar_head: {
+                        if_json {
+                            auto &j = this_state.emplace_back();
+                            traverse(n, j);
+                            return skip_children;
+                        } efc
+                    }
+                    case navbar_menu:
+                        if_json{
+                            nlohmann::json &j = this_state["children"];
+                            traverse(n, j);
+                            return skip_children;
+                        } efc
+                    case navbar_menu_element:
+                    case navbar_menu_element_header1:
+                    case navbar_menu_element_header2: {
+                        if_json{
+                            auto &j = this_state.emplace_back();
+                            traverse(n, j);
+                            return skip_children;
+                        } efc
+                    }
                     case ignore:
                         break;
                     default:
@@ -803,8 +927,9 @@ struct html_page {
         p.title = boost::trim_copy(value("id", "firstHeading"));
 
         auto contents = find_node("id", "mw-content-text");
-        cpp_traverser t{p};
-        contents.node().traverse(t);
+        cpp_traverser t{ p };
+        nlohmann::json j;
+        t.traverse(contents.node(), j);
         auto n = contents.node().first_child();
 
         auto default_text = [&]() {
