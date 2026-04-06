@@ -10,3 +10,5 @@ gen
 *.gz
 *.pdf
 *.tex
+
+data

@@ -844,7 +844,7 @@ struct html_page {
                     auto s = extract_text3(n);
                     auto bad = s.size() == 2 && s[0] == '\xc2' && s[1] == '\xa0';
                     if (!bad) {
-                        this_state.emplace_back() = extract_text3(n);
+                        //this_state.emplace_back() = extract_text3(n);
                     }
                 }
             } else if (is_tag("h3"sv)) {
@@ -888,8 +888,19 @@ struct html_page {
                                 j2["text"sv] = extract_text3(n);
                                 return skip_children;
                             } else {
-                                throw std::logic_error{ "unimpl" };
+                                auto &j2 = j.emplace_back();
+                                j2["ref"sv] = a.value();
+                                j2["text"sv] = extract_text3(n);
+                                return skip_children;
                             }
+                        } else if (n.is("code"sv)) {
+                            j.emplace_back() = extract_text3(n);
+                        } else if (n.is("span"sv)) {
+                            j.emplace_back() = extract_text3(n);
+                        } else if (n.is("br"sv)) {
+                            j.emplace_back() = "\n";
+                        } else if (n.is("i"sv)) {
+                            j.emplace_back() = extract_text3(n);
                         } else {
                             throw std::logic_error{"unimpl"};
                         }
@@ -967,13 +978,19 @@ struct html_page {
     };
 
     static inline std::set<std::string> heads;
-    void parse(cpp_reference::page_raw &p) {
+    void parse(cpp_reference::page_raw &p, const path &root_dir) {
+        path fn = p.name;
+        fn = fn.parent_path() / fn.stem() += ".h";
+        write_file(root_dir / fn, "");
+
         p.title = boost::trim_copy(value("id", "firstHeading"));
 
         auto contents = find_node("id", "mw-content-text");
         cpp_traverser t{ p };
         nlohmann::json j;
         t.traverse(contents.node(), j);
+        return;
+
         auto n = contents.node().first_child();
 
         auto default_text = [&]() {
@@ -1086,10 +1103,26 @@ struct html_page {
     }
 };
 
-void pages_to_cpp() {
+void pages_to_cpp(const path &root) {
+    std::println("parsing...");
+
+    primitives::CppEmitter all;
+    all.addLine("#pragma once");
+    all.emptyLines();
+    auto &headers = all.createInlineEmitter<primitives::CppEmitter>();
+    //all.emptyLines();
+    all.beginFunction("f(auto &&consumer)");
+
+    auto make_ns = [](std::string in) {
+        if (in.ends_with(".html"s)) {
+            in = in.substr(0, in.size() - 5);
+        }
+        boost::replace_all(in, "/", "::");
+        return in;
+        };
+
     cppreference_website w;
     primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
-    std::println("parsing...");
     for (auto &&p : db.select<::db::parser::schema::tables_::page>()) {
         auto n = p.name.value;
         if (n.starts_with("http")) {
@@ -1110,10 +1143,13 @@ void pages_to_cpp() {
         }
         //std::println("{}", n);
 
+        headers.addLine(std::format("#include \"{}.h\"", n));
+        all.addLine(make_ns(n) + "::f(consumer);");
+
         html_page page{ p };
         cpp_reference::page_raw pr;
         pr.name = n;
-        page.parse(pr);
+        page.parse(pr, root);
         w.pages[pr.title] = pr;
         continue;
 
@@ -1140,13 +1176,17 @@ void pages_to_cpp() {
 
     std::println("parsing done");
 
-    write_file("all.txt", w.print_raw());
-    write_file("all.tex", w.print_latex());
-    write_file("all.json", w.print_json());
+    all.endFunction();
+    write_file(root / "all.h", all.getText());
+
+    //write_file("all.txt", w.print_raw());
+    //write_file("all.tex", w.print_latex());
+    //write_file("all.json", w.print_json());
 }
 
 int main(int argc, char *argv[]) {
+    path root_dir{ "data" };
     //parse();
-    pages_to_cpp();
+    pages_to_cpp(root_dir);
     return 0;
 }
