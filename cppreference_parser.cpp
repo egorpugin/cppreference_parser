@@ -3,7 +3,7 @@
 
 // also see https://github.com/PeterFeicht/cppreference-doc
 
-#include "cpp.h"
+//#include "cpp.h"
 
 #include <primitives/emitter.h>
 #include <primitives/executor.h>
@@ -319,7 +319,7 @@ struct html_page {
         return n.select_nodes(".//tr");
     }
 
-    void parse(cpp_reference::page &p) {
+    /*void parse(cpp_reference::page &p) {
         p.title = value("id", "firstHeading");
         //extract_by_id("id", "bodyContent");
         extract_by_id("id", "mw-content-text");
@@ -409,7 +409,7 @@ struct html_page {
             s += extract_text2(tr.node()) + "\n";
         }
         p.all_text.emplace_back(s);
-    }
+    }*/
 };
 
 struct cpp_traverser {
@@ -984,18 +984,20 @@ void pages_to_cpp(const path &root) {
     all.addLine("#pragma once");
     all.emptyLines();
     auto &headers = all.createInlineEmitter<primitives::CppEmitter>();
+
+    auto begin_f = [](auto &e) {
+        e.beginFunction("void f(auto &&consumer)");
+        e.addLine("auto &c = consumer;");
+        };
     //all.emptyLines();
-    all.beginFunction("f(auto &&consumer)");
+    begin_f(all);
 
     auto make_ns = [](std::string in) {
-        if (in.ends_with(".html"s)) {
-            in = in.substr(0, in.size() - 5);
-        }
         boost::replace_all(in, "/", "::");
         return in;
         };
 
-    cppreference_website w;
+    std::set<std::string> pages;
     primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
     for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
         auto n = db_p.name.value;
@@ -1005,6 +1007,9 @@ void pages_to_cpp(const path &root) {
                 continue;
             }
             n = n.substr(n.find(w) + w.size());
+        }
+        if (n.ends_with(".html"s)) {
+            n = n.substr(0, n.size() - 5);
         }
         if (!n.contains("cpp/utility/format"sv)) {
             continue;
@@ -1017,48 +1022,39 @@ void pages_to_cpp(const path &root) {
         }
         //std::println("{}", n);
 
-        headers.addLine(std::format("#include \"{}.h\"", n));
-        all.addLine(make_ns(n) + "::f(consumer);");
+        pages.insert(n);
+        auto ns = make_ns(n);
 
-
-        //path fn = p.name;
-        //fn = fn.parent_path() / fn.stem() += ".h";
-        //write_file(root_dir / fn, "");
+        primitives::CppEmitter page_emitter;
+        page_emitter.beginNamespace(ns);
+        begin_f(page_emitter);
 
         html_page p{ db_p };
-        //p.title = boost::trim_copy(p.value("id", "firstHeading"));
-
-        cpp_reference::page_raw pr;
+        page_emitter.addLine(std::format("c << page{{\"{}\"sv}};", boost::trim_copy(p.value("id", "firstHeading"))));
 
         auto contents = p.find_node("id", "mw-content-text");
         cpp_traverser t;
         nlohmann::json j;
         t.traverse(contents.node(), j);
-        continue;
 
+        page_emitter.endFunction();
+        page_emitter.endNamespace(ns);
 
-
-        //std::optional<cppreference_objects::variant_type> obj;
-        //cppreference_objects::for_each([&]<typename T>(T**){
-        //    if (T::is(n)) {
-        //        obj = T{};
-        //        page.parse(std::get<T>(*obj));
-        //    }
-        //});
-        //if (!obj) {
-        //    cpp_reference::page p;
-        //    page.parse(p);
-        //    continue;
-        //}
-        //if (!obj) {
-        //    cpp_reference::page p;
-        //    page.parse(p);
-        //    continue;
-        //}
+        path fn = n;
+        fn = fn.parent_path() / fn.stem() += ".h";
+        write_file(root / fn, page_emitter.getText());
     }
 
     std::println("parsing done");
 
+    for (auto &&n : pages) {
+        auto ns = make_ns(n);
+
+        headers.addLine(std::format("#include \"{}.h\"", n));
+        all.addLine(ns + "::f(c);");
+    }
+
+    headers.addLine();
     all.endFunction();
     write_file(root / "all.h", all.getText());
 

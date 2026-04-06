@@ -248,3 +248,15 @@ struct cppreference_website {
         return s;
     }
 };
+
+namespace page_elements {
+
+struct page {
+    std::string value;
+};
+
+struct title {
+    std::string value;
+};
+
+}
