@@ -5,6 +5,7 @@
 
 #include "cpp.h"
 
+#include <primitives/emitter.h>
 #include <primitives/executor.h>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
@@ -751,13 +752,13 @@ struct html_page {
         bool is_ignored() const {
             return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
         }
-        bool traverse(pugi::xml_node n, auto &&this_state) {
+        bool traverse1(pugi::xml_node n, auto &&cb) {
             auto root = n;
             auto cur = n ? n.first_child() : n;
             if (cur) {
                 ++depth;
                 do {
-                    auto r = for_each(cur, this_state);
+                    auto r = cb(cur);
                     if (r == full_stop)
                         return false;
                     if (cur.first_child() && r != skip_children) {
@@ -778,6 +779,9 @@ struct html_page {
             }
             end(root);
             return true;
+        }
+        bool traverse(pugi::xml_node n, auto &&this_state) {
+            return traverse1(n, [&](pugi::xml_node n){return for_each(n, this_state);});
         }
         int for_each(pugi::xml_node &in, auto &&this_state) {
             pop_state();
@@ -801,7 +805,7 @@ struct html_page {
             auto cls = get_classes(n);
 
             auto is_tag = [&](auto &&t) {
-                return n.name() == t;
+                return n.is(t);
                 };
             auto is_tag_attr = [&](auto &&t, auto &&a) {
                 //return n.name() == t;
@@ -831,6 +835,26 @@ struct html_page {
 
             // can be data only stuff
             if (0) {
+            } else if (is_tag("span"sv)) {
+                if (has_class("t-mark-rev"sv)) {
+                    return skip_children;
+                }
+            } else if (is_tag(""sv)) {
+                if_json{
+                    auto s = extract_text3(n);
+                    auto bad = s.size() == 2 && s[0] == '\xc2' && s[1] == '\xa0';
+                    if (!bad) {
+                        this_state.emplace_back() = extract_text3(n);
+                    }
+                }
+            } else if (is_tag("h3"sv)) {
+                if_json{
+                    if (depth == 0) {
+                        auto &j = this_state["page"].emplace_back()["h3"sv]["text"sv];
+                        traverse(n, j);
+                    }
+                    return skip_children;
+                }
             } else if (is_tag("a"sv)) {
                 if (auto a = n.attribute("title"sv)) {
                     if_json{
@@ -838,6 +862,8 @@ struct html_page {
                         this_state["text"sv] = extract_text3(n);
                         return skip_children;
                     } efc
+                } else {
+
                 }
                 return true;
             } else if (is_tag("strong"sv)) {
@@ -850,7 +876,25 @@ struct html_page {
                 return true;
             } else if (is_tag("p"sv)) {
                 if_json{
-                    this_state["text"sv] = extract_text3(n);
+                    auto &j = this_state["page"].emplace_back()["text"sv];
+                    traverse1(n, [&](pugi::xml_node in) {
+                        node_wrapper n{ in };
+                        if (n.type() == pugi::node_pcdata) {
+                            j.emplace_back() = n.value();
+                        } else if (n.is("a"sv)) {
+                            if (auto a = n.attribute("title"sv)) {
+                                auto &j2 = j.emplace_back();
+                                j2["ref"sv] = a.value();
+                                j2["text"sv] = extract_text3(n);
+                                return skip_children;
+                            } else {
+                                throw std::logic_error{ "unimpl" };
+                            }
+                        } else {
+                            throw std::logic_error{"unimpl"};
+                        }
+                        return skip_children;
+                    });
                     return skip_children;
                 } efc
             }
@@ -869,7 +913,7 @@ struct html_page {
                     auto &st = this->st.back();
                     switch (st.t) {
                     case navbar: {
-                        nlohmann::json j;
+                        auto &j = this_state["navbar"];
                         traverse(n, j);
                         return skip_children;
                     }
