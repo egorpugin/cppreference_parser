@@ -252,11 +252,35 @@ struct link {
     std::string value;
 };
 struct link_end{};
+
 struct code{};
 struct code_end{};
+
 struct table{};
 struct table_end{};
 struct next_row{};
-struct next_col{};
+struct next_col {};
 
-}
+struct paragraph{};
+struct cite {};
+
+struct bold {};
+struct monospace {};
+struct italic {};
+#undef small
+struct small {};
+struct abbr {};
+
+struct ul {};
+struct ol {};
+struct li {};
+
+struct dl {};
+struct dd {};
+struct dt {};
+
+struct blockquote {};
+struct img {};
+struct caption {};
+struct sub {};
+struct sup {};
