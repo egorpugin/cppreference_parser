@@ -248,6 +248,9 @@ struct page {
 struct title {
     std::string value;
 };
+struct header {
+    int level;
+};
 struct link {
     std::string value;
 };
@@ -284,3 +287,7 @@ struct img {};
 struct caption {};
 struct sub {};
 struct sup {};
+
+struct template_ {};
+
+} // namespace page_elements

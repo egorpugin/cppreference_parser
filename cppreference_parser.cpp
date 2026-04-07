@@ -434,7 +434,7 @@ struct Emitter : primitives::CppEmitter {
     }
     void add_text(std::string_view t) {
         if (!t.empty()) {
-            format("c << R\"({})\";", t);
+            format("c << R\"xxx({})xxx\";", t);
         }
     }
 };
@@ -647,7 +647,7 @@ struct cpp_traverser {
         known_classes["t-lc"] = { state_type::lc };
 
         // ignored stuff
-        known_classes["external"] = { state_type::ignore, action_type::ignore };
+        known_classes["external"] = {};
         known_classes["t-inheritance-diagram"] = { state_type::ignore, action_type::ignore };
         //parse_navbar(p, n);
 
@@ -765,6 +765,7 @@ struct cpp_traverser {
         known_classes["extiw"] = {};
         known_classes["eq-fun-cpp-table"] = {};
         known_classes["citation"] = {};
+        known_classes["t-template"] = {};
         known_classes["t-template-editlink"] = {};
 
         known_classes["mbox-image"] = {};
@@ -772,6 +773,8 @@ struct cpp_traverser {
         // math tex (formulas)
         known_classes["mjax"] = {};
         known_classes["mjax-fallback"] = {};
+
+        known_classes["coliru-btn"] = {};
         }
     }
 
@@ -790,8 +793,21 @@ struct cpp_traverser {
             std::string_view c{i};
             auto kci = known_classes.find(std::string{ c });
             auto r = kci != known_classes.end();
-            auto is_kw = c.starts_with("kw"sv) && c.size() > 2 && isdigit(c[2]);
-            if (is_kw) {
+            auto is_kw0 = [&](auto &&sv){return c.starts_with(sv) && c.size() > 2 && isdigit(c[2]);};
+            auto is_kw = is_kw0("kw"sv);
+            auto is_sy = is_kw0("sy"sv);
+            auto is_br = is_kw0("br"sv);
+            if (false
+                || is_kw0("kw"sv)
+                || is_kw0("sy"sv)
+                || is_kw0("br"sv)
+                || is_kw0("me"sv)
+                || is_kw0("st"sv)
+                || is_kw0("nu"sv)
+                || is_kw0("es"sv)
+                || is_kw0("co"sv)
+                || cl.starts_with("coMULTI"sv)
+                ) {
                 return true;
             }
             if (r) {
@@ -848,12 +864,25 @@ struct cpp_traverser {
         node_wrapper n{ in };
         std::string_view name = n.name();
         if (0) {
+        } else if (n.is("div"sv)) {
+            std::string_view cl = n.attribute("class").as_string();
+            if (false) {
+            } else if (cl.contains("t-navbar"sv)) {
+            } else if (cl.contains("t-template-editlink"sv)) {
+                e.add_type("template_{}"sv);
+                traverse(n);
+            } else if (cl.contains("mw-geshi"sv)) {
+                e.add_text(extract_text3(n));
+            } else {
+                traverse(n);
+            }
+            return skip_children;
         } else if (name.size() == 2 && name[0] == 'h') {
             e.add_header(name[1] - '0');
             traverse(n);
-            e.addLine();
             return skip_children;
         } else if (n.is("a"sv)) {
+            std::string_view cl = n.attribute("class").as_string();
             if (0) {
             } else if (auto a = n.attribute("title"sv)) {
                 std::string v = a.as_string();
@@ -868,16 +897,6 @@ struct cpp_traverser {
             return skip_children;
         } else if (n.is("span"sv)) {
             traverse(n);
-            return skip_children;
-        } else if (n.is("div"sv)) {
-            std::string_view cl = n.attribute("class").as_string();
-            if (false) {
-            } else if (cl.contains("t-navbar"sv)) {
-            } else if (cl.contains("mw-geshi"sv)) {
-                e.add_text(extract_text3(n));
-            } else {
-                traverse(n);
-            }
             return skip_children;
         } else if (n.is("p"sv)) {
             e.add_type("paragraph{}"sv);
@@ -996,121 +1015,6 @@ struct cpp_traverser {
             return skip_children;
         }
         return true;
-
-
-        // can be data only stuff
-        /*if (0) {
-        } else if (is_tag("span"sv)) {
-            if (has_class("t-mark-rev"sv)) {
-                return skip_children;
-            }
-        } else if (is_tag(""sv)) {
-                auto s = extract_text3(n);
-                auto bad = s.size() == 2 && s[0] == '\xc2' && s[1] == '\xa0';
-                if (!bad) {
-                    //this_state.emplace_back() = extract_text3(n);
-                }
-        } else if (is_top("h3"sv)) {
-                    e.add_header(3);
-                    traverse(n, [&](pugi::xml_node in) {
-                        node_wrapper n{ in };
-                        if (n.is("span"sv)) {
-                            e.add_text(extract_text3(n));
-                        }
-                        return true;
-                    });
-                return skip_children;
-        } else if (is_tag("a"sv)) {
-            if (auto a = n.attribute("title"sv)) {
-                    //this_state["ref"sv] = a.value();
-                    //this_state["text"sv] = extract_text3(n);
-                    return skip_children;
-            } else {
-
-            }
-            return true;
-        } else if (is_tag("strong"sv)) {
-            if (has_class("selflink"sv)) {
-                    //this_state["text"sv] = extract_text3(n);
-                    return skip_children;
-            }
-            return true;
-        } else if (is_tag("p"sv)) {
-                auto &j = this_state["page"].emplace_back()["text"sv];
-                traverse1(n, [&](pugi::xml_node in) {
-                    node_wrapper n{ in };
-                    if (n.type() == pugi::node_pcdata) {
-                        j.emplace_back() = n.value();
-                    } else if (n.is("a"sv)) {
-                        if (auto a = n.attribute("title"sv)) {
-                            auto &j2 = j.emplace_back();
-                            j2["ref"sv] = a.value();
-                            j2["text"sv] = extract_text3(n);
-                            return skip_children;
-                        } else {
-                            auto &j2 = j.emplace_back();
-                            j2["ref"sv] = a.value();
-                            j2["text"sv] = extract_text3(n);
-                            return skip_children;
-                        }
-                    } else if (n.is("code"sv)) {
-                        j.emplace_back() = extract_text3(n);
-                    } else if (n.is("span"sv)) {
-                        j.emplace_back() = extract_text3(n);
-                    } else if (n.is("br"sv)) {
-                        j.emplace_back() = "\n";
-                    } else if (n.is("i"sv)) {
-                        j.emplace_back() = extract_text3(n);
-                    } else {
-                        throw std::logic_error{"unimpl"};
-                    }
-                    return skip_children;
-                });
-                return skip_children;
-        }
-        if (n.type() == pugi::node_pcdata && n.children().empty()) {
-                auto t = extract_text3(n);
-                this_state["text"sv] = t;
-                return true;
-        }
-
-        //
-        if (1) {
-            if (!st.empty()) {
-                using enum state_type;
-                auto &st = this->st.back();
-                switch (st.t) {
-                case navbar: {
-                    //auto &j = this_state["navbar"];
-                    //traverse(n, j);
-                    return skip_children;
-                }
-                case navbar_head: {
-                        //auto &j = this_state.emplace_back();
-                        //traverse(n, j);
-                        return skip_children;
-                }
-                case navbar_menu:
-                        //nlohmann::json &j = this_state["children"];
-                        //traverse(n, j);
-                        return skip_children;
-                case navbar_menu_element:
-                case navbar_menu_element_header1:
-                case navbar_menu_element_header2: {
-                        //auto &j = this_state.emplace_back();
-                        //traverse(n, j);
-                        return skip_children;
-                }
-                case ignore:
-                    break;
-                default:
-                    break;
-                }
-            }
-            int a = 5;
-            a++;
-        }
-        return true;*/
     }
 };
 
@@ -1129,11 +1033,31 @@ void pages_to_cpp(const path &root) {
     //all.emptyLines();
     begin_f(all);
 
-    auto make_ns = [](std::string in) {
-        boost::replace_all(in, "/", "::");
-        return in;
+    auto fix_name = [](std::string s) {
+        boost::replace_all(s, "NAN", "NAN_");
+        boost::replace_all(s, ".", "_");
+        boost::replace_all(s, "-", "_");
+        boost::replace_all(s, "(", "_lbrace");
+        boost::replace_all(s, ")", "_rbrace");
+        boost::replace_all(s, "\"", "_quote");
+        return s;
+        };
+    auto make_ns = [&](std::string in) {
+        std::string s;
+        for (auto &&t : split_string(in, "/")) {
+            s += "ns_" + t + "::";
+        }
+        boost::replace_all(s, "\"", "_quote");
+        boost::replace_all(s, "+", "_plus");
+        boost::replace_all(s, "~", "tilda_");
+        boost::replace_all(s, "=", "_equal");
+        s.pop_back();
+        s.pop_back();
+        return s;
         };
 
+    bool all_only{};
+    //all_only = true;
     std::set<std::string> pages;
     primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
     for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
@@ -1148,22 +1072,26 @@ void pages_to_cpp(const path &root) {
         if (n.ends_with(".html"s)) {
             n = n.substr(0, n.size() - 5);
         }
-        //boost::replace_all(n, "%2522", "\"");
-        boost::replace_all(n, "%2522", "_quote");
-        //boost::replace_all(n, "%252A", "+");
-        boost::replace_all(n, "%252A", "_plus");
-        if (n != "cpp/utility/format"sv) {
-            continue;
-        }
-        if (n != "cpp/utility/expected"sv) {
+        boost::replace_all(n, "%2522", "\"");
+        boost::replace_all(n, "%252A", "+");
+        if (1
+            && n != "cpp/utility/format"sv
+            && n != "cpp/compiler_support"sv
+            && n != "c/numeric/math/NAN"sv
+            //&& n != "cpp/header/stdatomic.h"sv
+            //&& n != "cpp/utility/expected"sv
+            //&& n != "cpp/memory/new/operator_delete"sv
+            ) {
             //continue;
         }
-        if (n != "cpp/memory/new/operator_delete"sv) {
-            //continue;
-        }
-        //std::println("{}", n);
+
+        n = fix_name(n);
 
         pages.insert(n);
+        if (!all_only) {
+            std::println("[{}] {}", pages.size(), n);
+        }
+
         auto ns = make_ns(n);
 
         Emitter page_emitter;
@@ -1175,15 +1103,19 @@ void pages_to_cpp(const path &root) {
         page_emitter.addLine();
 
         auto contents = p.find_node("id", "mw-content-text");
-        cpp_traverser t{page_emitter};
-        t.traverse(contents.node());
+        cpp_traverser t{ page_emitter };
+        if (!all_only) {
+            t.traverse(contents.node());
+        }
 
         page_emitter.endFunction();
         page_emitter.endNamespace(ns);
 
         path fn = n;
         fn = fn.parent_path() / fn.stem() += ".h";
-        write_file(root / fn, page_emitter.getText());
+        if (!all_only) {
+            write_file(root / fn, page_emitter.getText());
+        }
     }
 
     std::println("parsing done");
