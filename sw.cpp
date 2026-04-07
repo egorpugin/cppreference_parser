@@ -6,6 +6,7 @@ void build(Solution &s) {
         t += cpp26;
         t += "cppreference_parser.cpp";
         t += ".*\\.h"_r;
+        t += "data/.*"_rr;
         t +=
             "pub.egorpugin.primitives.emitter"_dep,
             "pub.egorpugin.primitives.executor"_dep,

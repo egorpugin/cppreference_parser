@@ -412,6 +412,33 @@ struct html_page {
     }*/
 };
 
+// FIXME: this one make indents inside raw strings with newlines, just make custom emitter
+struct Emitter : primitives::CppEmitter {
+    struct header {
+
+    };
+
+    auto format(auto &&f, auto &&...args) {
+        addLine(std::vformat(f, std::make_format_args(args...)));
+    }
+    void add_type(auto &&n, auto &&...args) {
+        if (sizeof...(args)) {
+            format("c << {};", std::vformat(n, std::make_format_args(args...)));
+        } else {
+            format("c << {};", n);
+        }
+    }
+    void add_header(int level) {
+        //format("auto &&t = c.add<header>{{{}}};", level);
+        format("c << header{{{}}};", level);
+    }
+    void add_text(std::string_view t) {
+        if (!t.empty()) {
+            format("c << R\"({})\";", t);
+        }
+    }
+};
+
 struct cpp_traverser {
     enum class state_type {
         not_set,
@@ -544,6 +571,7 @@ struct cpp_traverser {
         }
     };
 
+    Emitter &e;
     std::vector<state> st;
     state last_removed{};
     std::map<std::string, state_desc> known_classes;
@@ -552,7 +580,7 @@ struct cpp_traverser {
     enum {full_stop, continue_, skip_children};
     int depth{-1};
 
-    cpp_traverser() {
+    cpp_traverser(Emitter &e) : e{e} {
         {
         known_classes["t-navbar"] = {state_type::navbar};
         known_classes["t-navbar-head"] = {state_type::navbar_head};
@@ -756,13 +784,39 @@ struct cpp_traverser {
     bool is_ignored() const {
         return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
     }
-    bool traverse1(pugi::xml_node n, auto &&cb) {
-        auto root = n;
-        auto cur = n ? n.first_child() : n;
+    bool check_classes(pugi::xml_node &n) {
+        std::string_view cl = n.attribute("class").as_string();
+        for (auto &&i : std::views::split(cl, " "sv)) {
+            std::string_view c{i};
+            auto kci = known_classes.find(std::string{ c });
+            auto r = kci != known_classes.end();
+            auto is_kw = c.starts_with("kw"sv) && c.size() > 2 && isdigit(c[2]);
+            if (is_kw) {
+                return true;
+            }
+            if (r) {
+                st.push_back({ kci->second, depth, n });
+                return r;
+            }
+        }
+        if (!cl.empty()) {
+            std::println("unk class: {}", cl);
+        }
+        return false;
+    }
+    bool traverse1(pugi::xml_node in, auto &&cb) {
+        auto root = in;
+        auto cur = root ? root.first_child() : root;
         if (cur) {
             ++depth;
             do {
-                auto r = cb(cur);
+                if (!check_classes(cur)) {
+                }
+                int r = is_ignored() ? skip_children : cb(cur);
+                if (r == skip_children) {
+                    pop_state();
+                }
+                //int r = cb(cur);
                 if (r == full_stop)
                     return false;
                 if (cur.first_child() && r != skip_children) {
@@ -774,6 +828,7 @@ struct cpp_traverser {
                     while (!cur.next_sibling() && cur != root && cur.parent()) {
                         --depth;
                         cur = cur.parent();
+                        pop_state();
                     }
                     if (cur != root) {
                         cur = cur.next_sibling();
@@ -781,28 +836,15 @@ struct cpp_traverser {
                 }
             } while (cur && cur != root);
         }
-        pop_state();
         return true;
     }
-    bool traverse(pugi::xml_node n, auto &&this_state) {
-        return traverse1(n, [&](pugi::xml_node n){return for_each(n, this_state);});
+    bool traverse(pugi::xml_node n, auto &&cb) {
+        return traverse1(n, cb);
     }
-    int for_each(pugi::xml_node &in, auto &&this_state) {
-        pop_state();
-        if (is_ignored()) {
-            return true;
-        }
-
-#define req(x) requires {x;}
-#define ifc(x) if constexpr (x)
-#define ifcr(x) if constexpr (req(x))
-#define efc else {throw std::logic_error{"unexpected"s};}
-#define cvar(n, x) constexpr auto n##_ = req(x)
-
-#define if_json ifc(is_json##_)
-
-        cvar(is_json, this_state["ref"sv]);
-
+    bool traverse(pugi::xml_node n) {
+        return traverse(n, [&](pugi::xml_node n){return for_each(n);});
+    }
+    int for_each(pugi::xml_node &in) {
         node_wrapper n{in};
 
         auto cl = n.attribute("class").as_string();
@@ -810,6 +852,9 @@ struct cpp_traverser {
 
         auto is_tag = [&](auto &&t) {
             return n.is(t);
+            };
+        auto is_top = [&](auto &&t) {
+            return n.is(t) && depth == 0;
             };
         auto is_tag_attr = [&](auto &&t, auto &&a) {
             //return n.name() == t;
@@ -821,21 +866,88 @@ struct cpp_traverser {
             }
             return r;
         };
-        auto check_classes = [&]() {
-            for (auto &&c : cls) {
-                auto kci = known_classes.find(std::string{c});
-                auto r = kci != known_classes.end();
-                auto is_kw = c.starts_with("kw"sv) && c.size() > 2 && isdigit(c[2]);
-                if (is_kw) {
-                    return true;
+        auto extract_text = [&](this auto &&extract_text, auto &&n) -> void {
+            auto f = [&](pugi::xml_node in) -> int {
+                node_wrapper n{ in };
+                if (0) {
+                } else if (n.is("a"sv)) {
+                    if (0) {
+                    } else if (auto a = n.attribute("title"sv)) {
+                        std::string v = a.as_string();
+                        e.add_type("link{{\"{}\"}}"sv, boost::replace_all_copy(v, " "sv, "_"sv));
+                    } else if (auto h = n.attribute("href"sv)) {
+                        e.add_type("link{{\"{}\"}}"sv, h.as_string());
+                    } else {
+                        e.add_type("link{}"sv);
+                    }
+                    extract_text(n);
+                    e.add_type("link_end{}"sv);
+                    return skip_children;
+                } else if (n.is("span"sv)) {
+                    extract_text(n);
+                    return skip_children;
+                } else if (n.is("div"sv)) {
+                    extract_text(n);
+                    return skip_children;
+                } else if (n.is("p"sv)) {
+                    extract_text(n);
+                    return skip_children;
+                } else if (n.is("code"sv)) {
+                    e.add_type("code{}"sv);
+                    extract_text(n);
+                    e.add_type("code_end{}"sv);
+                    return skip_children;
+                } else if (n.is("table"sv)) {
+                    e.add_type("table{}"sv);
+                    extract_text(n);
+                    e.add_type("table_end{}"sv);
+                    return skip_children;
+                } else if (n.is("tr"sv)) {
+                    // read rowspan
+                    e.add_type("next_row{}"sv);
+                    extract_text(n);
+                    return skip_children;
+                } else if (n.is("td"sv)) {
+                    // read colspan
+                    e.add_type("next_col{}"sv);
+                    extract_text(n);
+                    return skip_children;
+                } else if (n.is(""sv)) {
+                    e.add_text(n.text().as_string());
+                    return skip_children;
+                } else {
+                    e.add_text(n.text().as_string());
+                    return skip_children;
                 }
-                if (r) {
-                    st.push_back({kci->second, depth, n});
-                    return r;
-                }
+                return true;
+                };
+            if (f(n) == continue_) {
+                traverse(n, f);
             }
-            return false;
-            };
+        };
+
+        if (depth == 0) {
+            std::string_view name = n.name();
+            if (name == "p"sv) {
+                e.add_type("paragraph{}"sv);
+                extract_text(n);
+                e.addLine();
+                return skip_children;
+            }
+            if (name == "table"sv) {
+                extract_text(n);
+                e.addLine();
+                return skip_children;
+            }
+            if (name.size() == 2 && name[0] == 'h') {
+                e.add_header(name[1] - '0');
+                extract_text(n);
+                e.addLine();
+                return skip_children;
+            }
+        }
+        return true;
+
 
         // can be data only stuff
         if (0) {
@@ -844,43 +956,38 @@ struct cpp_traverser {
                 return skip_children;
             }
         } else if (is_tag(""sv)) {
-            if_json{
                 auto s = extract_text3(n);
                 auto bad = s.size() == 2 && s[0] == '\xc2' && s[1] == '\xa0';
                 if (!bad) {
                     //this_state.emplace_back() = extract_text3(n);
                 }
-            }
-        } else if (is_tag("h3"sv)) {
-            if_json{
-                if (depth == 0) {
-                    auto &j = this_state["page"].emplace_back()["h3"sv]["text"sv];
-                    traverse(n, j);
-                }
+        } else if (is_top("h3"sv)) {
+                    e.add_header(3);
+                    traverse(n, [&](pugi::xml_node in) {
+                        node_wrapper n{ in };
+                        if (n.is("span"sv)) {
+                            e.add_text(extract_text3(n));
+                        }
+                        return true;
+                    });
                 return skip_children;
-            }
         } else if (is_tag("a"sv)) {
             if (auto a = n.attribute("title"sv)) {
-                if_json{
-                    this_state["ref"sv] = a.value();
-                    this_state["text"sv] = extract_text3(n);
+                    //this_state["ref"sv] = a.value();
+                    //this_state["text"sv] = extract_text3(n);
                     return skip_children;
-                } efc
             } else {
 
             }
             return true;
         } else if (is_tag("strong"sv)) {
             if (has_class("selflink"sv)) {
-                if_json{
-                    this_state["text"sv] = extract_text3(n);
+                    //this_state["text"sv] = extract_text3(n);
                     return skip_children;
-                } efc
             }
             return true;
         } else if (is_tag("p"sv)) {
-            if_json{
-                auto &j = this_state["page"].emplace_back()["text"sv];
+                /*auto &j = this_state["page"].emplace_back()["text"sv];
                 traverse1(n, [&](pugi::xml_node in) {
                     node_wrapper n{ in };
                     if (n.type() == pugi::node_pcdata) {
@@ -909,50 +1016,41 @@ struct cpp_traverser {
                         throw std::logic_error{"unimpl"};
                     }
                     return skip_children;
-                });
+                });*/
                 return skip_children;
-            } efc
         }
         /*if (n.type() == pugi::node_pcdata && n.children().empty()) {
-            if_json{
                 auto t = extract_text3(n);
                 this_state["text"sv] = t;
                 return true;
-            }
         }*/
 
         //
-        if (check_classes()) {
+        if (1) {
             if (!st.empty()) {
                 using enum state_type;
                 auto &st = this->st.back();
                 switch (st.t) {
                 case navbar: {
-                    auto &j = this_state["navbar"];
-                    traverse(n, j);
+                    //auto &j = this_state["navbar"];
+                    //traverse(n, j);
                     return skip_children;
                 }
                 case navbar_head: {
-                    if_json {
-                        auto &j = this_state.emplace_back();
-                        traverse(n, j);
+                        //auto &j = this_state.emplace_back();
+                        //traverse(n, j);
                         return skip_children;
-                    } efc
                 }
                 case navbar_menu:
-                    if_json{
-                        nlohmann::json &j = this_state["children"];
-                        traverse(n, j);
+                        //nlohmann::json &j = this_state["children"];
+                        //traverse(n, j);
                         return skip_children;
-                    } efc
                 case navbar_menu_element:
                 case navbar_menu_element_header1:
                 case navbar_menu_element_header2: {
-                    if_json{
-                        auto &j = this_state.emplace_back();
-                        traverse(n, j);
+                        //auto &j = this_state.emplace_back();
+                        //traverse(n, j);
                         return skip_children;
-                    } efc
                 }
                 case ignore:
                     break;
@@ -962,16 +1060,6 @@ struct cpp_traverser {
             }
             int a = 5;
             a++;
-        } else {
-            /*static struct x {
-                std::map<std::string, std::string> once;
-                ~x() {
-                    for (auto &&[cl,v] : once) {
-                        std::cout << std::format("unk class: {}: {}", cl, v) << "\n";
-                    }
-                }
-            } xx;
-            xx.once.emplace(cl, p.name);*/
         }
         return true;
     }
@@ -980,10 +1068,10 @@ struct cpp_traverser {
 void pages_to_cpp(const path &root) {
     std::println("parsing...");
 
-    primitives::CppEmitter all;
+    Emitter all;
     all.addLine("#pragma once");
     all.emptyLines();
-    auto &headers = all.createInlineEmitter<primitives::CppEmitter>();
+    auto &headers = all.createInlineEmitter<Emitter>();
 
     auto begin_f = [](auto &e) {
         e.beginFunction("void f(auto &&consumer)");
@@ -1011,7 +1099,7 @@ void pages_to_cpp(const path &root) {
         if (n.ends_with(".html"s)) {
             n = n.substr(0, n.size() - 5);
         }
-        if (!n.contains("cpp/utility/format"sv)) {
+        if (n != "cpp/utility/format"sv) {
             continue;
         }
         if (n != "cpp/utility/expected"sv) {
@@ -1025,17 +1113,17 @@ void pages_to_cpp(const path &root) {
         pages.insert(n);
         auto ns = make_ns(n);
 
-        primitives::CppEmitter page_emitter;
+        Emitter page_emitter;
         page_emitter.beginNamespace(ns);
         begin_f(page_emitter);
 
         html_page p{ db_p };
-        page_emitter.addLine(std::format("c << page{{\"{}\"sv}};", boost::trim_copy(p.value("id", "firstHeading"))));
+        page_emitter.addLine(std::format("c << page{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
+        page_emitter.addLine();
 
         auto contents = p.find_node("id", "mw-content-text");
-        cpp_traverser t;
-        nlohmann::json j;
-        t.traverse(contents.node(), j);
+        cpp_traverser t{page_emitter};
+        t.traverse(contents.node());
 
         page_emitter.endFunction();
         page_emitter.endNamespace(ns);
@@ -1057,10 +1145,6 @@ void pages_to_cpp(const path &root) {
     headers.addLine();
     all.endFunction();
     write_file(root / "all.h", all.getText());
-
-    //write_file("all.txt", w.print_raw());
-    //write_file("all.tex", w.print_latex());
-    //write_file("all.json", w.print_json());
 }
 
 int main(int argc, char *argv[]) {

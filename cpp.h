@@ -147,9 +147,6 @@ struct compiler_support : parsed_object<compiler_support> {
     auto title() const {return std::format("Compiler support for C++11");}
 };
 
-struct header {
-
-};
 
 } // namespace cpp_reference
 
@@ -161,12 +158,6 @@ struct type_list {
         (f((Types**)nullptr),...);
     }
 };
-
-using cppreference_objects = type_list<
-    cpp_reference::page,
-    cpp_reference::c_language_standard_page,
-    cpp_reference::compiler_support
->;
 
 struct cppreference_website {
     std::map<std::string, cpp_reference::page_raw> pages;
@@ -254,9 +245,18 @@ namespace page_elements {
 struct page {
     std::string value;
 };
-
 struct title {
     std::string value;
 };
+struct link {
+    std::string value;
+};
+struct link_end{};
+struct code{};
+struct code_end{};
+struct table{};
+struct table_end{};
+struct next_row{};
+struct next_col{};
 
 }
