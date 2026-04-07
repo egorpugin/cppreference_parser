@@ -20,6 +20,9 @@
 #include <ranges>
 #include <syncstream>
 
+// find all templates in data dir
+// grep "=Template:\K.*(?=&)" -r . -o -P -h | sort | uniq
+
 namespace db::parser {
 
 using namespace primitives::sqlite::db;
@@ -82,67 +85,6 @@ auto download_url(auto &&url) {
     });
 }
 
-auto make_html_tokens(std::string_view d) {
-    std::vector<std::string_view> tokens;
-    tokens.reserve(100000);
-    size_t p{};
-    while (1) {
-        auto b = d.find('<', p);
-        if (b == -1) {
-            if (b != d.size()) {
-                b = d.size();
-                tokens.emplace_back(d.substr(p, b - p));
-            }
-            break;
-        }
-        if (b != p) {
-            tokens.emplace_back(d.substr(p, b - p));
-            p = b;
-            continue;
-        }
-        auto sv = d.substr(b);
-        if (sv.starts_with("<!--")) {
-            constexpr auto etag = "-->"sv;
-            auto e = d.find(etag, b);
-            e += etag.size();
-            tokens.emplace_back(d.substr(b, e - b));
-            p = e;
-            continue;
-        }
-        constexpr auto cdata = "<![CDATA["sv;
-        if (sv.starts_with(cdata)) {
-            constexpr auto etag = "]]>"sv;
-            auto e = d.find(etag, b);
-            //b += cdata.size();
-            tokens.emplace_back(d.substr(b, e - b));
-            //e += etag.size();
-            p = e;
-            continue;
-        }
-        auto e = d.find('>', b);
-        ++e;
-        tokens.emplace_back(d.substr(b, e - b));
-        p = e;
-    }
-}
-auto fix_html_pre_tags_for_xml(std::string_view d) {
-    std::string s;
-    bool in_pre{};
-    for (auto &&t : tokens) {
-        if (t.starts_with("<pre"sv)) {
-            in_pre = true;
-        } else if (t.starts_with("</pre"sv)) {
-            in_pre = false;
-        } else if (in_pre && !t.starts_with('<')) {
-        } else if (in_pre && std::ranges::all_of(t, ::isspace)) {
-            s += std::format("\"{}\"", t);
-            continue;
-        }
-        s += std::format("{}", t);
-    }
-    return s;
-}
-
 struct page {
     std::string url;
     std::string source;
@@ -151,7 +93,6 @@ struct page {
     page() = default;
     page(const std::string &url) : url{url} {
         source = download_url(url);
-        source = fix_html_pre_tags_for_xml(source);
         source = tidy_html(source);
         parse_links();
     }
@@ -1164,6 +1105,11 @@ void pages_to_cpp(const path &root) {
 }
 
 int main(int argc, char *argv[]) {
+    auto d = cache().find<url_request_cache>("https://en.cppreference.com/w/cpp/header/algorithm.html"s);
+    auto root = make_tree(primitives::html::make_tokens(*d));
+    return 0;
+
+
     path root_dir{ "data" };
     parse();
     pages_to_cpp(root_dir);
