@@ -83,42 +83,120 @@ auto download_url(auto &&url) {
 
 struct html_node {
     enum class state_type {
-        expect_tag,
+        expect_start_tag,
+        expect_end_tag,
+    };
+    struct state {
+        state_type st{};
+        std::string_view sv;
+        size_t p{}, e, cdata;
     };
 
     std::string_view n;
+    html_node *parent{};
     std::vector<html_node> children;
 
-    void parse(std::string_view d) {
-        state_type state{};
+    size_t parse(std::string_view d, state s = state{}) {
+        std::vector<std::string_view> tokens;
+        tokens.reserve(100000);
         size_t p{};
         while (1) {
-            switch (state) {
-            case state_type::expect_tag:
-                break;
-            }
-            p = d.find('<', p);
-            if (p == -1) {
-                break;
-            }
-            auto e = d.find('>', p);
-            ++e;
-            std::string_view sv{d.data() + p, e-p};
-            if (sv.starts_with("<!--"sv)) {
-                constexpr auto etag = "-->"sv;
-                if (!sv.ends_with(etag)) {
-                    e = d.find(etag, p);
-                    e += etag.size();
-                    sv = std::string_view{d.data() + p, e-p};
+            auto b = d.find('<', p);
+            if (b == -1) {
+                if (b != d.size()) {
+                    b = d.size();
+                    tokens.emplace_back(d.substr(p, b - p));
                 }
-            } else if (sv.starts_with("<!DOCTYPE"sv)) {
-            } else if (sv.ends_with("/>"sv)) {
-                children.emplace_back(sv);
-            } else {
-
+                break;
             }
+            if (b != p) {
+                tokens.emplace_back(d.substr(p, b - p));
+                p = b;
+                continue;
+            }
+            auto sv = d.substr(b);
+            if (sv.starts_with("<!--")) {
+                constexpr auto etag = "-->"sv;
+                auto e = d.find(etag, b);
+                e += etag.size();
+                tokens.emplace_back(d.substr(b, e - b));
+                p = e;
+                continue;
+            }
+            constexpr auto cdata = "<![CDATA["sv;
+            if (sv.starts_with(cdata)) {
+                constexpr auto etag = "]]>"sv;
+                auto e = d.find(etag, b);
+                b += cdata.size();
+                tokens.emplace_back(d.substr(b, e - b));
+                e += etag.size();
+                p = e;
+                continue;
+            }
+            auto e = d.find('>', b);
+            ++e;
+            tokens.emplace_back(d.substr(b, e - b));
             p = e;
         }
+        while (1) {
+            //switch (s.st) {
+            //case state_type::expect_start_tag:
+                s.p = d.find('<', s.p);
+                if (s.p == -1) {
+                    return 0;
+                }
+                s.sv = d.substr(s.p);
+                if (s.sv.starts_with("<!"sv)) {
+                    if (s.sv.starts_with("<!--"sv)) {
+                        constexpr auto etag = "-->"sv;
+                        s.e = d.find(etag, s.p);
+                        s.p = s.e;
+                    } else if (s.sv.starts_with("<![CDATA["sv)) {
+                        constexpr auto etag = "]]>"sv;
+                        s.e = d.find(etag, s.p);
+                        s.p = s.e;
+                    } else if (s.sv.starts_with("<!DOCTYPE"sv)) {
+                        s.e = d.find('>', s.p);
+                        ++s.e;
+                        s.sv = std::string_view{ d.data() + s.p, s.e - s.p };
+                        children.emplace_back(s.sv);
+                        s.p = s.e;
+                    } else {
+                        throw;
+                    }
+                } else {
+                    s.e = d.find('>', s.p);
+                    ++s.e;
+                    s.sv = std::string_view{ d.data() + s.p, s.e - s.p };
+                    if (s.sv.ends_with("/>"sv)) {
+                        s.p = s.e;
+                        children.emplace_back(s.sv);
+                    } else if (s.sv.starts_with("</"sv)) {
+                        s.p = s.e;
+                        children.emplace_back(s.sv);
+                    } else if (s.sv.ends_with(">"sv)) {
+                        children.emplace_back(s.sv);
+                        if (!is_void_tag(s.sv)) {
+                            s.e = parse(d.substr(s.e));
+                            s.st = state_type::expect_end_tag;
+                        }
+                    } else {
+
+                    }
+                }
+                //break;
+            //case state_type::expect_end_tag:
+                //break;
+            //}
+            //p = e;
+        }
+        return -1;
+    }
+    static bool is_void_tag(auto sv) {
+        sv.remove_prefix(1);
+        return false
+            || sv.starts_with("input"sv)
+            ;
     }
 };
 
