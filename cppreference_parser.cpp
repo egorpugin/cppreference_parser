@@ -10,7 +10,7 @@
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
 #include <primitives/templates2/sqlite.h>
-#include <primitives/templates2/xml.h>
+//#include <primitives/templates2/xml.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -81,6 +81,47 @@ auto download_url(auto &&url) {
     });
 }
 
+struct html_node {
+    enum class state_type {
+        expect_tag,
+    };
+
+    std::string_view n;
+    std::vector<html_node> children;
+
+    void parse(std::string_view d) {
+        state_type state{};
+        size_t p{};
+        while (1) {
+            switch (state) {
+            case state_type::expect_tag:
+                break;
+            }
+            p = d.find('<', p);
+            if (p == -1) {
+                break;
+            }
+            auto e = d.find('>', p);
+            ++e;
+            std::string_view sv{d.data() + p, e-p};
+            if (sv.starts_with("<!--"sv)) {
+                constexpr auto etag = "-->"sv;
+                if (!sv.ends_with(etag)) {
+                    e = d.find(etag, p);
+                    e += etag.size();
+                    sv = std::string_view{d.data() + p, e-p};
+                }
+            } else if (sv.starts_with("<!DOCTYPE"sv)) {
+            } else if (sv.ends_with("/>"sv)) {
+                children.emplace_back(sv);
+            } else {
+
+            }
+            p = e;
+        }
+    }
+};
+
 struct page {
     std::string url;
     std::string source;
@@ -99,7 +140,7 @@ struct page {
         return url.contains("/w/cpp/"sv) || url.ends_with("/w/cpp"sv);
     }
     void parse_links() {
-        pugi::xml_document doc;
+        /*pugi::xml_document doc;
         if (auto r = doc.load_buffer(source.data(), source.size()); !r) {
             throw std::runtime_error{std::format("name = {}, xml parse error = {}", url, r.description())};
         }
@@ -132,7 +173,7 @@ struct page {
                 l = "https://" + l.substr(7);
             }
             links.insert(l);
-        }
+        }*/
     }
 };
 
@@ -217,12 +258,12 @@ void parse() {
 
 static std::string extract_text3(auto &&n, const std::string &delim = ""s) {
     std::string s;
-    if (n.type() == pugi::node_pcdata) {
+    /*if (n.type() == pugi::node_pcdata) {
         s += n.value() + delim;
     }
     for (auto &&c : n.children()) {
         s += extract_text3(c, delim) + delim;
-    }
+    }*/
     boost::trim(s);
     return s;
 }
@@ -233,17 +274,15 @@ static auto get_classes(auto &&n) {
 }
 
 struct html_page {
-    pugi::xml_document doc;
+    std::string data;
+    html_node doc;
 
     html_page(const ::db::parser::schema::tables_::page &p) {
-        auto &page = p.source.value;
-        if (!doc.load_buffer(page.data(), page.size())) {
-            std::println("cannot read xml {}", p.name.value);
-            throw;
-        }
+        data = p.source.value;
+        doc.parse(data);
     }
 
-    static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
+    /*static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
         return n.select_node((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
     }
     static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
@@ -529,14 +568,14 @@ struct cpp_traverser {
     };
     struct state : state_desc {
         int d;
-        pugi::xml_node n;
+        //pugi::xml_node n;
     };
 
-    struct node_wrapper : pugi::xml_node {
+    /*struct node_wrapper : pugi::xml_node {
         bool is(std::string_view v) const {
             return v == name();
         }
-    };
+    };*/
 
     Emitter &e;
     std::vector<state> st;
@@ -754,7 +793,7 @@ struct cpp_traverser {
     bool is_ignored() const {
         return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
     }
-    bool check_classes(pugi::xml_node &n) {
+    /*bool check_classes(pugi::xml_node &n) {
         std::string_view cl = n.attribute("class").as_string();
         for (auto &&i : std::views::split(cl, " "sv)) {
             std::string_view c{i};
@@ -982,7 +1021,7 @@ struct cpp_traverser {
             return skip_children;
         }
         return true;
-    }
+    }*/
 };
 
 void pages_to_cpp(const path &root) {
@@ -1067,14 +1106,14 @@ void pages_to_cpp(const path &root) {
         begin_f(page_emitter);
 
         html_page p{ db_p };
-        page_emitter.addLine(std::format("c << page{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
+        /*page_emitter.addLine(std::format("c << page{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
         page_emitter.addLine();
 
         auto contents = p.find_node("id", "mw-content-text");
         cpp_traverser t{ page_emitter };
         if (!all_only) {
             t.traverse(contents.node());
-        }
+        }*/
 
         page_emitter.endFunction();
         page_emitter.endNamespace(ns);
@@ -1101,8 +1140,13 @@ void pages_to_cpp(const path &root) {
 }
 
 int main(int argc, char *argv[]) {
+    auto d = cache().find<url_request_cache>("https://en.cppreference.com/w/cpp/header/algorithm.html"s);
+    html_node n;
+    n.parse(*d);
+    return 0;
+
     path root_dir{ "data" };
-    parse();
+    //parse();
     pages_to_cpp(root_dir);
     return 0;
 }
