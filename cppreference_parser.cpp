@@ -89,7 +89,7 @@ struct page {
     page() = default;
     page(const std::string &url) : url{url} {
         source = download_url(url);
-        source = tidy_html(source);
+        //source = tidy_html(source);
         parse_links();
     }
     bool is_c_page() const {
@@ -215,31 +215,7 @@ void parse() {
     p.start();
 }
 
-static auto extract_text1(auto &&n) {
-    std::string full_text;
-    for (const auto &item : n.select_nodes(".//text()")) {
-        full_text += item.node().value() + "\n"s;
-    }
-    boost::trim(full_text);
-    return full_text;
-}
-static std::string extract_text2(auto &&n) {
-    std::string s;
-    for (auto &&c : n.children()) {
-        if (c.type() == pugi::node_pcdata) {
-            s += c.value();
-        } else if (c.type() == pugi::node_element) {
-            auto cls = get_classes(c);
-            if (cls.contains("noprint"sv) || cls.contains("editsection"sv)) {
-                continue;
-            }
-            s += extract_text2(c);
-        }
-    }
-    boost::trim(s);
-    return s;
-}
-static std::string extract_text3(auto &&n, const std::string &delim = " "s) {
+static std::string extract_text3(auto &&n, const std::string &delim = ""s) {
     std::string s;
     if (n.type() == pugi::node_pcdata) {
         s += n.value() + delim;
@@ -308,15 +284,6 @@ struct html_page {
     }
     auto find_navbar_cols(auto &&n) {
         return n.select_nodes("./td");
-    }
-    auto find_a(auto &&n) {
-        return n.select_node(".//a");
-    }
-    auto find_strong(auto &&n) {
-        return n.select_node(".//strong");
-    }
-    auto find_table_rows(auto &&n) {
-        return n.select_nodes(".//tr");
     }
 
     /*void parse(cpp_reference::page &p) {
@@ -1075,14 +1042,15 @@ void pages_to_cpp(const path &root) {
         boost::replace_all(n, "%2522", "\"");
         boost::replace_all(n, "%252A", "+");
         if (1
-            && n != "cpp/utility/format"sv
-            && n != "cpp/compiler_support"sv
-            && n != "c/numeric/math/NAN"sv
+            //&& n != "cpp/utility/format"sv
+            //&& n != "cpp/compiler_support"sv
+            //&& n != "c/numeric/math/NAN"sv
+            && n != "cpp/header/algorithm"sv
             //&& n != "cpp/header/stdatomic.h"sv
             //&& n != "cpp/utility/expected"sv
             //&& n != "cpp/memory/new/operator_delete"sv
             ) {
-            //continue;
+            continue;
         }
 
         n = fix_name(n);
@@ -1134,7 +1102,7 @@ void pages_to_cpp(const path &root) {
 
 int main(int argc, char *argv[]) {
     path root_dir{ "data" };
-    //parse();
+    parse();
     pages_to_cpp(root_dir);
     return 0;
 }
