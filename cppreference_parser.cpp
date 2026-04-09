@@ -10,7 +10,7 @@
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
 #include <primitives/templates2/sqlite.h>
-#include <primitives/templates2/xml.h>
+//#include <primitives/templates2/xml.h>
 #include <primitives/templates2/html.h>
 #include <nlohmann/json.hpp>
 
@@ -93,7 +93,7 @@ struct page {
     page() = default;
     page(const std::string &url) : url{url} {
         source = download_url(url);
-        source = tidy_html(source);
+        //source = tidy_html(source);
         parse_links();
     }
     bool is_c_page() const {
@@ -103,11 +103,8 @@ struct page {
         return url.contains("/w/cpp/"sv) || url.ends_with("/w/cpp"sv);
     }
     void parse_links() {
-        pugi::xml_document doc;
-        if (auto r = doc.load_buffer(source.data(), source.size()); !r) {
-            throw std::runtime_error{std::format("name = {}, xml parse error = {}", url, r.description())};
-        }
-        for (auto &&n : doc.select_nodes("//a[@href]")) {
+        auto root = primitives::html::make_tree(source);
+        for (auto &&n : root.select_nodes("//a[@href]")) {
             auto a = n.node().attribute("href");
             std::string l = a.value();
             if (l.starts_with("http"sv)) {
@@ -237,7 +234,26 @@ static auto get_classes(auto &&n) {
 }
 
 struct html_page {
-    pugi::xml_document doc;
+    primitives::html::node root;
+
+    html_page(const std::string &p) {
+        root = primitives::html::make_tree(p);
+    }
+    static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
+        return n.find(attrname, idname);
+    }
+    //static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
+    //    return n.select_nodes((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
+    //}
+    auto find_node(auto &&attrname, auto &&idname) {
+        return find_node(root, attrname, idname);
+    }
+    std::string value(auto &&attrname, auto &&idname) {
+        auto n = find_node(attrname, idname);
+        return n ? n->text() : std::string{};
+    }
+
+    /*pugi::xml_document doc;
 
     html_page(const ::db::parser::schema::tables_::page &p) {
         auto &page = p.source.value;
@@ -246,7 +262,6 @@ struct html_page {
             throw;
         }
     }
-
     static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
         return n.select_node((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
     }
@@ -1030,9 +1045,10 @@ void pages_to_cpp(const path &root) {
     bool all_only{};
     //all_only = true;
     std::set<std::string> pages;
-    primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
-    for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
-        auto n = db_p.name.value;
+    //primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
+    //for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
+    for (auto &&[p,db_p] : cache().get_all<url_request_cache>()) {
+        auto n = p;
         if (n.starts_with("http")) {
             auto w = "/w/"sv;
             if (!n.contains(w)) {
@@ -1077,7 +1093,7 @@ void pages_to_cpp(const path &root) {
         auto contents = p.find_node("id", "mw-content-text");
         cpp_traverser t{ page_emitter };
         if (!all_only) {
-            t.traverse(contents.node());
+            t.traverse(*contents);
         }
 
         page_emitter.endFunction();
@@ -1105,13 +1121,13 @@ void pages_to_cpp(const path &root) {
 }
 
 int main(int argc, char *argv[]) {
-    auto d = cache().find<url_request_cache>("https://en.cppreference.com/w/cpp/header/algorithm.html"s);
-    auto root = make_tree(primitives::html::make_tokens(*d));
-    return 0;
+    //auto d = cache().find<url_request_cache>("https://en.cppreference.com/w/cpp/header/algorithm.html"s);
+    //auto root = make_tree(*d);
+    //return 0;
 
 
     path root_dir{ "data" };
-    parse();
+    //parse();
     pages_to_cpp(root_dir);
     return 0;
 }
