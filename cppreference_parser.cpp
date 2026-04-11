@@ -5,7 +5,7 @@
 
 //#include "cpp.h"
 
-#include <primitives/emitter.h>
+//#include <primitives/emitter.h>
 #include <primitives/executor.h>
 #include <primitives/http.h>
 #include <primitives/sw/main.h>
@@ -19,6 +19,7 @@
 #include <print>
 #include <ranges>
 #include <syncstream>
+#include <variant>
 
 // find all templates in data dir
 // grep "=Template:\K.*(?=&)" -r . -o -P -h | sort | uniq
@@ -93,7 +94,6 @@ struct page {
     page() = default;
     page(const std::string &url) : url{url} {
         source = download_url(url);
-        //source = tidy_html(source);
         parse_links();
     }
     bool is_c_page() const {
@@ -103,10 +103,10 @@ struct page {
         return url.contains("/w/cpp/"sv) || url.ends_with("/w/cpp"sv);
     }
     void parse_links() {
-        auto root = primitives::html::make_tree(source);
-        for (auto &&n : root.select_nodes("//a[@href]")) {
-            auto a = n.node().attribute("href");
-            std::string l = a.value();
+        primitives::html::root r{source};
+        for (auto &&n : r | std::views::filter([](auto &&n){return n.is("a"sv) && n.has("href"sv);})) {
+            auto a = n.attribute("href");
+            std::string l{*a};
             if (l.starts_with("http"sv)) {
                 continue;
             }
@@ -218,13 +218,13 @@ void parse() {
 
 static std::string extract_text3(auto &&n, const std::string &delim = ""s) {
     std::string s;
-    if (n.type() == pugi::node_pcdata) {
-        s += n.value() + delim;
+    for (auto &&c : n) {
+        if (c.type == primitives::html::token_type::text) {
+            s += c.value() + delim;
+        }
     }
-    for (auto &&c : n.children()) {
-        s += extract_text3(c, delim) + delim;
-    }
-    boost::trim(s);
+    if (s.size() > 5000) s.resize(5000);
+    //boost::trim(s);
     return s;
 }
 
@@ -234,10 +234,9 @@ static auto get_classes(auto &&n) {
 }
 
 struct html_page {
-    primitives::html::node root;
+    primitives::html::root root;
 
-    html_page(const std::string &p) {
-        root = primitives::html::make_tree(p);
+    html_page(const std::string &p) : root{p} {
     }
     static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
         return n.find(attrname, idname);
@@ -398,14 +397,40 @@ struct html_page {
     }*/
 };
 
-// FIXME: this one make indents inside raw strings with newlines, just make custom emitter
-struct Emitter : primitives::CppEmitter {
-    struct header {
+struct cpp_emitter {
+    struct line {
+        std::variant<std::string, cpp_emitter*> text;
 
+        std::string get_text() const {
+            std::string s;
+            std::visit(overload(
+                [&](const std::string &s2) {
+                    s += s2;
+                },
+                [&](const cpp_emitter *e) {
+                    s += e->get_text();
+                }), text);
+            return s;
+        }
     };
 
+    int indent{};
+    std::string space{"    "};
+    std::string newline{"\n"};
+    std::vector<line> lines;
+
+    cpp_emitter &create_inline_emitter() {
+        return *std::get<cpp_emitter*>(lines.emplace_back(new cpp_emitter{indent, space, newline}).text);
+    }
+    void add_line(std::string s = ""s) {
+        if (!s.empty()) {
+            auto n = indent;
+            while (n--) s = space + s;
+        }
+        lines.emplace_back(std::move(s));
+    }
     auto format(auto &&f, auto &&...args) {
-        addLine(std::vformat(f, std::make_format_args(args...)));
+        add_line(std::vformat(f, std::make_format_args(args...)));
     }
     void add_type(auto &&n, auto &&...args) {
         if (sizeof...(args)) {
@@ -422,6 +447,45 @@ struct Emitter : primitives::CppEmitter {
         if (!t.empty()) {
             format("c << R\"xxx({})xxx\";", t);
         }
+    }
+    std::string get_text() const {
+        std::string s;
+        for (auto &&l : lines) {
+            s += l.get_text() + "\n";
+        }
+        return s;
+    }
+
+    void increase_indent(int i = 1) {
+        indent += i;
+        //if (indent < 0) indent = 0;
+    }
+    void decrease_indent(int i = -1) {increase_indent(i);}
+
+    void begin_block(const std::string &s = {}, bool inc_indent = true) {
+        if (!s.empty())
+            add_line(s);
+        if (inc_indent)
+            increase_indent();
+    }
+    void end_block(bool semicolon = false) {
+        decrease_indent();
+        add_line(semicolon ? "};" : "}");
+    }
+    void begin_function(const std::string &s = "") {
+        begin_block(s);
+    }
+    void end_function() {
+        end_block();
+        add_line();
+    }
+    void begin_namespace(const std::string &s) {
+        add_line("namespace " + s + " {");
+        add_line();
+    }
+    void end_namespace(const std::string &ns = {}) {
+        add_line("} // namespace " + ns);
+        add_line();
     }
 };
 
@@ -548,25 +612,14 @@ struct cpp_traverser {
     };
     struct state : state_desc {
         int d;
-        pugi::xml_node n;
+        const primitives::html::node *n;
     };
 
-    struct node_wrapper : pugi::xml_node {
-        bool is(std::string_view v) const {
-            return v == name();
-        }
-    };
-
-    Emitter &e;
+    cpp_emitter &e;
     std::vector<state> st;
-    state last_removed{};
     std::map<std::string, state_desc> known_classes;
-    nlohmann::json j_state;
 
-    enum {full_stop, continue_, skip_children};
-    int depth{-1};
-
-    cpp_traverser(Emitter &e) : e{e} {
+    cpp_traverser(cpp_emitter &e) : e{e} {
         {
         known_classes["t-navbar"] = {state_type::navbar};
         known_classes["t-navbar-head"] = {state_type::navbar_head};
@@ -764,17 +817,16 @@ struct cpp_traverser {
         }
     }
 
-    void pop_state() {
+    void pop_state(int depth) {
         while (!st.empty() && st.back().d >= depth) {
-            last_removed = st.back();
             st.pop_back();
         }
     }
     bool is_ignored() const {
         return std::ranges::any_of(st, [](auto &&st){return st.a == action_type::ignore;});
     }
-    bool check_classes(pugi::xml_node &n) {
-        std::string_view cl = n.attribute("class").as_string();
+    bool check_classes(const primitives::html::node &n, int depth) {
+        auto cl = n.attribute_or_default("class");
         for (auto &&i : std::views::split(cl, " "sv)) {
             std::string_view c{i};
             auto kci = known_classes.find(std::string{ c });
@@ -792,66 +844,36 @@ struct cpp_traverser {
                 || is_kw0("nu"sv)
                 || is_kw0("es"sv)
                 || is_kw0("co"sv)
-                || cl.starts_with("coMULTI"sv)
+                || c.starts_with("coMULTI"sv)
                 ) {
                 return true;
             }
             if (r) {
-                st.push_back({ kci->second, depth, n });
+                st.push_back({ kci->second, depth, &n });
                 return r;
             }
         }
         if (!cl.empty()) {
             std::println("unk class: {}", cl);
-        }
-        return false;
-    }
-    bool traverse1(pugi::xml_node in, auto &&cb) {
-        auto root = in;
-        auto cur = root ? root.first_child() : root;
-        if (cur) {
-            ++depth;
-            do {
-                if (!check_classes(cur)) {
-                }
-                int r = is_ignored() ? skip_children : cb(cur);
-                if (r == skip_children) {
-                    pop_state();
-                }
-                //int r = cb(cur);
-                if (r == full_stop)
-                    return false;
-                if (cur.first_child() && r != skip_children) {
-                    ++depth;
-                    cur = cur.first_child();
-                } else if (cur.next_sibling())
-                    cur = cur.next_sibling();
-                else {
-                    while (!cur.next_sibling() && cur != root && cur.parent()) {
-                        --depth;
-                        cur = cur.parent();
-                        pop_state();
-                    }
-                    if (cur != root) {
-                        cur = cur.next_sibling();
-                    }
-                }
-            } while (cur && cur != root);
+            return false;
         }
         return true;
     }
-    bool traverse(pugi::xml_node n, auto &&cb) {
-        return traverse1(n, cb);
+    void traverse(const primitives::html::node &n) {
+        n.traverse([&](auto &n, int depth){return for_each(n, depth);});
     }
-    bool traverse(pugi::xml_node n) {
-        return traverse(n, [&](pugi::xml_node n){return for_each(n);});
-    }
-    int for_each(pugi::xml_node &in) {
-        node_wrapper n{ in };
+    primitives::html::node::traverse_action for_each(const primitives::html::node &n, int depth) {
+        using enum primitives::html::node::traverse_action;
+
+        pop_state(depth);
+        if (!check_classes(n, depth) || is_ignored()) {
+            return skip_children;
+        }
+
         std::string_view name = n.name();
         if (0) {
         } else if (n.is("div"sv)) {
-            std::string_view cl = n.attribute("class").as_string();
+            std::string_view cl = n.attribute_or_default("class");
             if (false) {
             } else if (cl.contains("t-navbar"sv)) {
             } else if (cl.contains("t-template-editlink"sv)) {
@@ -868,13 +890,13 @@ struct cpp_traverser {
             traverse(n);
             return skip_children;
         } else if (n.is("a"sv)) {
-            std::string_view cl = n.attribute("class").as_string();
+            std::string_view cl = n.attribute_or_default("class");
             if (0) {
-            } else if (auto a = n.attribute("title"sv)) {
-                std::string v = a.as_string();
+            } else if (auto a = n.attribute_or_default("title"sv); !a.empty()) {
+                std::string v{a};
                 e.add_type("link{{\"{}\"}}"sv, boost::replace_all_copy(v, " "sv, "_"sv));
-            } else if (auto h = n.attribute("href"sv)) {
-                e.add_type("link{{\"{}\"}}"sv, h.as_string());
+            } else if (auto h = n.attribute_or_default("href"sv); !h.empty()) {
+                e.add_type("link{{\"{}\"}}"sv, h);
             } else {
                 e.add_type("link{}"sv);
             }
@@ -993,31 +1015,27 @@ struct cpp_traverser {
             traverse(n);
             return skip_children;
         } else if (n.is(""sv)) {
-            e.add_text(n.text().as_string());
+            e.add_text(n.text());
             return skip_children;
         } else {
             std::println("unhandled tag: {}", name);
-            e.add_text(n.text().as_string());
+            e.add_text(n.text());
             return skip_children;
         }
-        return true;
+        return continue_;
     }
 };
 
 void pages_to_cpp(const path &root) {
     std::println("parsing...");
 
-    Emitter all;
-    all.addLine("#pragma once");
-    all.emptyLines();
-    auto &headers = all.createInlineEmitter<Emitter>();
-
-    auto begin_f = [](auto &e) {
-        e.beginFunction("void f(auto &&consumer)");
-        e.addLine("auto &c = consumer;");
-        };
-    //all.emptyLines();
-    begin_f(all);
+    cpp_emitter all;
+    all.add_line("#pragma once");
+    all.add_line();
+    auto &headers = all.create_inline_emitter();
+    auto struct_name = "pages"s;
+    all.begin_block("struct " + struct_name + " {");
+    auto &members = all.create_inline_emitter();
 
     auto fix_name = [](std::string s) {
         boost::replace_all(s, "NAN", "NAN_");
@@ -1082,42 +1100,59 @@ void pages_to_cpp(const path &root) {
 
         auto ns = make_ns(n);
 
-        Emitter page_emitter;
-        page_emitter.beginNamespace(ns);
-        begin_f(page_emitter);
-
         html_page p{ db_p };
-        page_emitter.addLine(std::format("c << page{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
-        page_emitter.addLine();
 
+        cpp_emitter page_emitter;
+        page_emitter.begin_namespace(ns);
+        page_emitter.begin_block("struct page {");
+        page_emitter.add_line(std::format("std::string title{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
+        page_emitter.add_line();
+        page_emitter.add_line("void render(auto &renderer);");
+        page_emitter.end_block(true);
+        page_emitter.add_line();
+        page_emitter.begin_function("void page::render(auto &renderer) {");
+        page_emitter.add_line("auto &c = renderer;");
+        page_emitter.add_line();
+
+        //begin_f(page_emitter);
         auto contents = p.find_node("id", "mw-content-text");
         cpp_traverser t{ page_emitter };
         if (!all_only) {
             t.traverse(*contents);
         }
 
-        page_emitter.endFunction();
-        page_emitter.endNamespace(ns);
+        page_emitter.end_function();
+        page_emitter.end_namespace(ns);
 
         path fn = n;
         fn = fn.parent_path() / fn.stem() += ".h";
         if (!all_only) {
-            write_file(root / fn, page_emitter.getText());
+            write_file(root / fn, page_emitter.get_text());
         }
     }
 
     std::println("parsing done");
 
+    all.add_line("void render(auto &&renderer);");
+    all.end_block(true);
+    all.add_line();
+    all.begin_function("void " + struct_name + "::render(auto &&renderer) {");
+    all.add_line("auto &c = renderer;");
+    all.add_line();
+    auto &calls = all.create_inline_emitter();
+    all.end_function();
+
+    calls.add_line("// we can use reflection to do for each all members");
     for (auto &&n : pages) {
         auto ns = make_ns(n);
 
-        headers.addLine(std::format("#include \"{}.h\"", n));
-        all.addLine(ns + "::f(c);");
+        headers.add_line(std::format("#include \"{}.h\"", n));
+        members.add_line(ns + "::page xxx;");
+        calls.add_line("c.render(xxx);");
     }
+    //headers.add_line();
 
-    headers.addLine();
-    all.endFunction();
-    write_file(root / "all.h", all.getText());
+    write_file(root / "all.h", all.get_text());
 }
 
 int main(int argc, char *argv[]) {
