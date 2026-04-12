@@ -216,19 +216,25 @@ void parse() {
     p.start();
 }
 
-static std::string extract_text3(auto &&n, const std::string &delim = ""s) {
+// FIXME: use traverse and ignore ignored classes
+std::string extract_text3(auto &&n, const std::string &delim = ""s) {
     std::string s;
     for (auto &&c : n) {
         if (c.type == primitives::html::token_type::text) {
             s += c.value() + delim;
         }
     }
-    if (s.size() > 5000) s.resize(5000);
+    //if (s.size() > 5000) s.resize(5000);
     //boost::trim(s);
     return s;
 }
 
-static auto get_classes(auto &&n) {
+// FIXME?: use traverse and ignore ignored classes?
+std::string extract_as_is(auto &&n) {
+    return n.raw();
+}
+
+auto get_classes(auto &&n) {
     std::string_view cl = n.attribute("class").as_string();
     return std::set{ std::from_range, cl | std::views::split(' ') | std::views::transform([](auto &&v) {return std::string_view{v}; }) };
 }
@@ -241,9 +247,6 @@ struct html_page {
     static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
         return n.find(attrname, idname);
     }
-    //static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
-    //    return n.select_nodes((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
-    //}
     auto find_node(auto &&attrname, auto &&idname) {
         return find_node(root, attrname, idname);
     }
@@ -252,68 +255,8 @@ struct html_page {
         return n ? n->text() : std::string{};
     }
 
-    /*pugi::xml_document doc;
+    /*
 
-    html_page(const ::db::parser::schema::tables_::page &p) {
-        auto &page = p.source.value;
-        if (!doc.load_buffer(page.data(), page.size())) {
-            std::println("cannot read xml {}", p.name.value);
-            throw;
-        }
-    }
-    static auto find_node(auto &&n, auto &&attrname, auto &&idname) {
-        return n.select_node((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
-    }
-    static auto find_nodes(auto &&n, auto &&attrname, auto &&idname) {
-        return n.select_nodes((".//*[@"s + attrname + "=\""s + idname + "\"]").c_str());
-    }
-    auto find_node(auto &&attrname, auto &&idname) {
-        return find_node(doc, attrname, idname);
-    }
-    std::string value(auto &&attrname, auto &&idname) {
-        auto n = find_node(attrname, idname);
-        return n ? std::string{n.node().text().as_string()} : std::string{};
-    }
-    std::string extract_by_id(auto &&attrname, auto &&idname) {
-        auto n = find_node(attrname, idname);
-        if (!n) {
-            return {};
-        }
-        n.node().print(std::cout, " ");
-        int a = 5;
-        a++;
-        return {};
-    }
-
-    auto find_navbar() {
-        return find_node("class", "t-navbar");
-    }
-    auto find_navbar_heads(auto &&n) {
-        return n.select_nodes("./*[contains(@class, 't-navbar-head')]");
-    }
-    auto find_navbar_menu(auto &&n) {
-        return n.select_node("./*[contains(@class, 't-navbar-menu')]");
-    }
-    auto find_navbar_rows(auto &&n) {
-        return n.select_nodes("./div/div/table/tr");
-    }
-    auto find_navbar_rows2(auto &&n) {
-        return n.select_nodes("./td/div/table/tr");
-    }
-    auto find_navbar_cols(auto &&n) {
-        return n.select_nodes("./td");
-    }
-
-    /*void parse(cpp_reference::page &p) {
-        p.title = value("id", "firstHeading");
-        //extract_by_id("id", "bodyContent");
-        extract_by_id("id", "mw-content-text");
-    }
-    void parse(cpp_reference::compiler_support &p) {
-        //extract_by_id("id", "bodyContent");
-    }
-    void parse(cpp_reference::c_language_standard_page &p) {
-    }
     void parse_navbar(cpp_reference::page_raw &p, auto &&n) {
         for (auto &&hn : find_navbar_heads(n)) {
             auto &n = p.navbars.emplace_back();
@@ -870,16 +813,61 @@ struct cpp_traverser {
             return skip_children;
         }
 
+        struct scope_tag {
+            cpp_emitter &e;
+            std::string type_name;
+
+            scope_tag(cpp_emitter &e, std::string_view tag) : e{ e }, type_name{ tag } {
+                e.add_type(std::format("{}{{}}", type_name));
+            }
+            ~scope_tag() {
+                e.add_type(std::format("{}_end{{}}", type_name));
+            }
+        };
+        struct scoped_as_is {
+            cpp_emitter &e;
+            std::string tag;
+
+            scoped_as_is(cpp_emitter &e, const primitives::html::node &n) : e{ e } {
+                tag = n.tag();
+                e.add_text(std::format("{}", n.tag_raw()));
+            }
+            ~scoped_as_is() {
+                e.add_text(std::format("</{}>", tag));
+            }
+        };
+
+        std::string_view cl = n.attribute_or_default("class");
+        auto has_class = [&](auto &&c) {
+            auto p = cl.find(c);
+            if (p != -1) {
+                if ((p == 0 || cl[p] == ' ' || cl[p] == '\"') && (cl.size() == p + c.size() || cl[p + c.size()] == ' ')) {
+                    return true;
+                }
+            }
+            return false;
+            };
+        auto has_classes = [&](auto &&...c) {
+            return (false || ... || has_class(c));
+            };
+        // get_classes(n);
+
         std::string_view name = n.name();
         if (0) {
         } else if (n.is("div"sv)) {
-            std::string_view cl = n.attribute_or_default("class");
             if (false) {
             } else if (cl.contains("t-navbar"sv)) {
             } else if (cl.contains("t-template-editlink"sv)) {
                 e.add_type("template_{}"sv);
                 traverse(n);
+            } else if (cl.contains("t-dsc-member-div"sv)) {
+                scoped_as_is sc{e,n};
+                for (auto &&c : n.children) {
+                    scoped_as_is sc{ e,*c };
+                    traverse(*c);
+                }
             } else if (cl.contains("mw-geshi"sv)) {
+                scope_tag t{e, "code"};
                 e.add_text(extract_text3(n));
             } else {
                 traverse(n);
@@ -888,9 +876,10 @@ struct cpp_traverser {
         } else if (name.size() == 2 && name[0] == 'h') {
             e.add_header(name[1] - '0');
             traverse(n);
+            e.add_type("header_end{}"sv);
+            e.add_line();
             return skip_children;
         } else if (n.is("a"sv)) {
-            std::string_view cl = n.attribute_or_default("class");
             if (0) {
             } else if (auto a = n.attribute_or_default("title"sv); !a.empty()) {
                 std::string v{a};
@@ -904,6 +893,14 @@ struct cpp_traverser {
             e.add_type("link_end{}"sv);
             return skip_children;
         } else if (n.is("span"sv)) {
+            if (has_classes("t-mark"sv, "t-mark-rev"sv)) {
+                e.add_text(extract_as_is(n));
+                return skip_children;
+            }
+            if (has_classes("t-lines"sv)) {
+                e.add_text(extract_as_is(n));
+                return skip_children;
+            }
             traverse(n);
             return skip_children;
         } else if (n.is("p"sv)) {
@@ -914,14 +911,14 @@ struct cpp_traverser {
             traverse(n);
             return skip_children;
         } else if (n.is("code"sv)) {
-            e.add_type("code{}"sv);
+            scope_tag t{ e, "code_tag" };
             traverse(n);
-            e.add_type("code_end{}"sv);
             return skip_children;
         } else if (n.is("table"sv)) {
             e.add_type("table{}"sv);
             traverse(n);
             e.add_type("table_end{}"sv);
+            e.add_line();
             return skip_children;
         } else if (n.is("tbody"sv)) {
         } else if (n.is("tr"sv)) {
@@ -1044,6 +1041,19 @@ void pages_to_cpp(const path &root) {
         boost::replace_all(s, "(", "_lbrace");
         boost::replace_all(s, ")", "_rbrace");
         boost::replace_all(s, "\"", "_quote");
+        boost::replace_all(s, "+", "_plus");
+        boost::replace_all(s, "~", "tilda_");
+        boost::replace_all(s, "=", "_equal");
+        boost::replace_all(s, "!", "_exclamation");
+        boost::replace_all(s, "\n", "");
+        boost::replace_all(s, "\r", "");
+        return s;
+        };
+    auto fix2_name = [](std::string s) {
+        boost::replace_all(s, "/", "_slash_");
+        boost::replace_all(s, " ", "_");
+        boost::replace_all(s, "\n", "");
+        boost::replace_all(s, "\r", "");
         return s;
         };
     auto make_ns = [&](std::string in) {
@@ -1051,13 +1061,18 @@ void pages_to_cpp(const path &root) {
         for (auto &&t : split_string(in, "/")) {
             s += "ns_" + t + "::";
         }
-        boost::replace_all(s, "\"", "_quote");
-        boost::replace_all(s, "+", "_plus");
-        boost::replace_all(s, "~", "tilda_");
-        boost::replace_all(s, "=", "_equal");
+        fix_name(s);
         s.pop_back();
         s.pop_back();
         return s;
+        };
+    std::map<std::string, int> vars;
+    auto make_var = [&](std::string in) {
+        in = fix2_name(in);
+        if (auto [it,inserted] = vars.emplace(in, 0); !inserted) {
+            in += std::format("{}", ++it->second);
+        }
+        return in;
         };
 
     bool all_only{};
@@ -1088,7 +1103,7 @@ void pages_to_cpp(const path &root) {
             //&& n != "cpp/utility/expected"sv
             //&& n != "cpp/memory/new/operator_delete"sv
             ) {
-            continue;
+            //continue;
         }
 
         n = fix_name(n);
@@ -1100,12 +1115,13 @@ void pages_to_cpp(const path &root) {
 
         auto ns = make_ns(n);
 
-        html_page p{ db_p };
+        html_page page{ db_p };
 
         cpp_emitter page_emitter;
         page_emitter.begin_namespace(ns);
         page_emitter.begin_block("struct page {");
-        page_emitter.add_line(std::format("std::string title{{\"{}\"s}};", boost::trim_copy(p.value("id", "firstHeading"))));
+        page_emitter.add_line(std::format("std::string filename{{\"{}\"s}};", n));
+        page_emitter.add_line(std::format("std::string title{{R\"xxx({})xxx\"s}};", boost::trim_copy(page.value("id", "firstHeading"))));
         page_emitter.add_line();
         page_emitter.add_line("void render(auto &renderer);");
         page_emitter.end_block(true);
@@ -1115,7 +1131,7 @@ void pages_to_cpp(const path &root) {
         page_emitter.add_line();
 
         //begin_f(page_emitter);
-        auto contents = p.find_node("id", "mw-content-text");
+        auto contents = page.find_node("id", "mw-content-text");
         cpp_traverser t{ page_emitter };
         if (!all_only) {
             t.traverse(*contents);
@@ -1137,7 +1153,6 @@ void pages_to_cpp(const path &root) {
     all.end_block(true);
     all.add_line();
     all.begin_function("void " + struct_name + "::render(auto &&renderer) {");
-    all.add_line("auto &c = renderer;");
     all.add_line();
     auto &calls = all.create_inline_emitter();
     all.end_function();
@@ -1145,10 +1160,11 @@ void pages_to_cpp(const path &root) {
     calls.add_line("// we can use reflection to do for each all members");
     for (auto &&n : pages) {
         auto ns = make_ns(n);
+        auto v = make_var(n);
 
         headers.add_line(std::format("#include \"{}.h\"", n));
-        members.add_line(ns + "::page xxx;");
-        calls.add_line("c.render(xxx);");
+        members.add_line(ns + "::page " + v + ";");
+        calls.add_line("renderer.render(" + v + ");");
     }
     //headers.add_line();
 
@@ -1156,12 +1172,7 @@ void pages_to_cpp(const path &root) {
 }
 
 int main(int argc, char *argv[]) {
-    //auto d = cache().find<url_request_cache>("https://en.cppreference.com/w/cpp/header/algorithm.html"s);
-    //auto root = make_tree(*d);
-    //return 0;
-
-
-    path root_dir{ "data" };
+    path root_dir{ "generated/cpp" };
     //parse();
     pages_to_cpp(root_dir);
     return 0;

@@ -251,13 +251,17 @@ struct title {
 struct header {
     int level;
 };
+struct header_end {};
 struct link {
     std::string value;
 };
 struct link_end{};
 
 struct code{};
-struct code_end{};
+struct code_end {};
+
+struct code_tag {};
+struct code_tag_end {};
 
 struct table{};
 struct table_end{};

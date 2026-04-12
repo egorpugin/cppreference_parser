@@ -4,7 +4,6 @@
 *.txt
 *.7z
 .build
-gen
 *.html
 *.text
 *.gz
@@ -12,3 +11,4 @@ gen
 *.tex
 
 data
+gen*

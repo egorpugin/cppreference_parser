@@ -6,16 +6,16 @@ void build(Solution &s) {
         t += cpp26;
         t += "cppreference_parser.cpp";
         t += ".*\\.h"_r;
-        t += "data/.*"_rr;
+        t += "generated/.*"_rr;
         t +=
-            "pub.egorpugin.primitives.emitter"_dep,
+            //"pub.egorpugin.primitives.emitter"_dep,
             "pub.egorpugin.primitives.executor"_dep,
             "pub.egorpugin.primitives.http"_dep,
             "pub.egorpugin.primitives.templates2"_dep,
             "pub.egorpugin.primitives.sw.main"_dep,
             "org.sw.demo.nlohmann.json.natvis"_dep,
-            "org.sw.demo.zeux.pugixml"_dep,
-            "pub.egorpugin.htacg.tidy_html5"_dep,
+            //"org.sw.demo.zeux.pugixml"_dep,
+            //"pub.egorpugin.htacg.tidy_html5"_dep,
             "org.sw.demo.sqlite3"_dep,
             "org.sw.demo.boost.pfr"_dep
             ;
@@ -28,7 +28,7 @@ void build(Solution &s) {
         t += cpp26;
         t += "mediawiki_output.cpp";
         t += ".*\\.h"_r;
-        t += "data/.*"_rr;
+        t += "generated/.*"_rr;
         t +=
             "pub.egorpugin.primitives.templates2"_dep,
             "pub.egorpugin.primitives.sw.main"_dep
