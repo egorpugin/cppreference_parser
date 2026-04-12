@@ -12,3 +12,18 @@
 
 data
 gen*
+
+
+wikiapi_pages.py
+*.py
+*.ctrl
+*.lwp
+*.bat
+*.db-*
+
+apica*
+__pyca*
+1*
+
+*.json
+logs
