@@ -18,6 +18,7 @@ struct mediawiki_consumer {
 
 from wikiapi import *
 
+with ThreadPoolExecutor(max_workers=1) as executor:
 )"};
 
     ~mediawiki_consumer() {
@@ -26,13 +27,15 @@ from wikiapi import *
     void render(auto &page) {
         std::println("[{}] {}", ++n, page.title);
         auto t = page.title;
-        boost::replace_all(t, "<", "_");
-        boost::replace_all(t, ">", "_");
+        boost::replace_all(t, "<", "_lt");
+        boost::replace_all(t, ">", "_gt");
+        boost::replace_all(t, "[", "_lsq");
+        boost::replace_all(t, "]", "_gsq");
         boost::replace_all(t, "\n", "");
         boost::replace_all(t, "\r", "");
         auto fn = root_dir / page.filename;
         fn += ".txt";
-        python_uploader += std::format("make_page('{}', '{}')\n", t, normalize_path(fn).string());
+        python_uploader += std::format("    executor.submit(make_page, {}, '{}', '{}')\n", n, page.filename, normalize_path(fn).string());
         page.render(*this);
         write_file(fn, s);
         s.clear();
@@ -86,7 +89,7 @@ from wikiapi import *
         return *this;
     }
     this_type &operator<<(code &&v) {
-        s += std::format("\n<syntaxhighlight lang=\"cpp\" line>\n");
+        s += std::format("\n<syntaxhighlight lang=\"cpp\">\n");
         return *this;
     }
     this_type &operator<<(code_end &&v) {

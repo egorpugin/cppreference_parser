@@ -901,6 +901,11 @@ struct cpp_traverser {
                 e.add_text(extract_as_is(n));
                 return skip_children;
             }
+            if (cl.contains("mw-geshi"sv)) {
+                scope_tag t{ e, "code_tag" };
+                e.add_text(extract_text3(n));
+                return skip_children;
+            }
             traverse(n);
             return skip_children;
         } else if (n.is("p"sv)) {
@@ -1103,7 +1108,7 @@ void pages_to_cpp(const path &root) {
             //&& n != "cpp/utility/expected"sv
             //&& n != "cpp/memory/new/operator_delete"sv
             ) {
-            //continue;
+            continue;
         }
 
         n = fix_name(n);
