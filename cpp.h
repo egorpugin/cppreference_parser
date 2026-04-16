@@ -265,8 +265,12 @@ struct code_tag_end {};
 
 struct table{};
 struct table_end{};
-struct next_row{};
-struct next_col {};
+struct next_row {
+    int rowspan;
+};
+struct next_col {
+    int colspan;
+};
 
 struct paragraph{};
 struct cite {};
@@ -293,5 +297,6 @@ struct sub {};
 struct sup {};
 
 struct template_ {};
+struct br {};
 
 } // namespace page_elements

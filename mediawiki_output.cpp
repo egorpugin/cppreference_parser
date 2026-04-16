@@ -14,6 +14,7 @@ struct mediawiki_consumer {
     int inside_table{};
     int n{};
     bool external_link{};
+    bool in_pre{};
     std::string python_uploader{R"(# -*- coding: utf-8 -*-
 
 from wikiapi import *
@@ -68,10 +69,16 @@ with ThreadPoolExecutor(max_workers=1) as executor:
     }
     this_type &operator<<(next_row &&v) {
         s += "\n|-";
+        if (v.rowspan) {
+            s += std::format("rowspan=\"{}\" | ", v.rowspan);
+        }
         return *this;
     }
     this_type &operator<<(next_col &&v) {
         s += "\n| ";
+        if (v.colspan) {
+            s += std::format("colspan=\"{}\" | ", v.colspan);
+        }
         return *this;
     }
     this_type &operator<<(table_end &&v) {
@@ -102,6 +109,10 @@ with ThreadPoolExecutor(max_workers=1) as executor:
     }
     this_type &operator<<(code_tag_end &&v) {
         s += std::format("</code>");
+        return *this;
+    }
+    this_type &operator<<(br &&v) {
+        s += std::format("<br>");
         return *this;
     }
     template <auto N>

@@ -837,11 +837,11 @@ struct cpp_traverser {
             }
         };
 
-        std::string_view cl = n.attribute_or_default("class");
+        auto cl = n.attribute_or_default("class"sv);
         auto has_class = [&](auto &&c) {
             auto p = cl.find(c);
             if (p != -1) {
-                if ((p == 0 || cl[p] == ' ' || cl[p] == '\"') && (cl.size() == p + c.size() || cl[p + c.size()] == ' ')) {
+                if ((p == 0 || cl[p - 1] == ' ') && (cl.size() == p + c.size() || cl[p + c.size()] == ' ')) {
                     return true;
                 }
             }
@@ -849,6 +849,15 @@ struct cpp_traverser {
             };
         auto has_classes = [&](auto &&...c) {
             return (false || ... || has_class(c));
+            };
+        auto get_int_attr_val = [&](auto &&c) {
+            int i{};
+            if (auto v = n.attribute_or_default(c); !v.empty()) {
+                if (auto [_, ec] = std::from_chars(v.data(), v.data() + v.size(), i); ec != std::errc{}) {
+                    throw;
+                }
+            }
+            return i;
             };
         // get_classes(n);
 
@@ -927,18 +936,15 @@ struct cpp_traverser {
             return skip_children;
         } else if (n.is("tbody"sv)) {
         } else if (n.is("tr"sv)) {
-            // read rowspan
-            e.add_type("next_row{}"sv);
+            e.add_type("next_row{{{}}}"sv, get_int_attr_val("rowspan"sv));
             traverse(n);
             return skip_children;
         } else if (n.is("th"sv)) {
-            // read colspan
-            e.add_type("next_col{}"sv);
+            e.add_type("next_col{{{}}}"sv, get_int_attr_val("colspan"sv));
             traverse(n);
             return skip_children;
         } else if (n.is("td"sv)) {
-            // read colspan
-            e.add_type("next_col{}"sv);
+            e.add_type("next_col{{{}}}"sv, get_int_attr_val("colspan"sv));
             traverse(n);
             return skip_children;
         } else if (n.is("cite"sv)) {
@@ -966,7 +972,7 @@ struct cpp_traverser {
             traverse(n);
             return skip_children;
         } else if (n.is("br"sv)) {
-            e.add_text("\n");
+            e.add_type("br{}"sv);
             return skip_children;
         } else if (n.is("abbr"sv)) {
             e.add_type("abbr{}"sv);
@@ -1100,10 +1106,11 @@ void pages_to_cpp(const path &root) {
         boost::replace_all(n, "%2522", "\"");
         boost::replace_all(n, "%252A", "+");
         if (1
+            && n != "Main_Page"sv
             //&& n != "cpp/utility/format"sv
             //&& n != "cpp/compiler_support"sv
             //&& n != "c/numeric/math/NAN"sv
-            && n != "cpp/header/algorithm"sv
+            //&& n != "cpp/header/algorithm"sv
             //&& n != "cpp/header/stdatomic.h"sv
             //&& n != "cpp/utility/expected"sv
             //&& n != "cpp/memory/new/operator_delete"sv

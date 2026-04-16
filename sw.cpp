@@ -6,7 +6,6 @@ void build(Solution &s) {
         t += cpp26;
         t += "cppreference_parser.cpp";
         t += ".*\\.h"_r;
-        t += "generated/.*"_rr;
         t +=
             //"pub.egorpugin.primitives.emitter"_dep,
             "pub.egorpugin.primitives.executor"_dep,
@@ -28,10 +27,15 @@ void build(Solution &s) {
         t += cpp26;
         t += "mediawiki_output.cpp";
         t += ".*\\.h"_r;
-        t += "generated/.*"_rr;
+        t -= "generated/.*"_rr;
         t +=
             "pub.egorpugin.primitives.templates2"_dep,
             "pub.egorpugin.primitives.sw.main"_dep
             ;
+        /*t.addCommand()
+            << cmd::prog(parser)
+            << cmd::end()
+            << cmd::out("generated/cpp/all.h");
+            ;*/
     }
 }
