@@ -42,24 +42,29 @@ struct schema {
 
 struct url_request_cache : primitives::sqlite::kv<std::string, std::string> {};
 static auto &cache() {
-    thread_local auto c = []() {
+    // init once first
+    static auto f = []() {
         primitives::sqlite::cache <
             url_request_cache
         > c{ "cache.db" };
         c.enable_wal();
         c.set_busy_timeout(5s);
         return c;
-        }();
-    return c;
+        };
+    static auto c = f();
+    thread_local auto tl = f();
+    return tl;
 }
 
 const path mirror_root_dir = "cppreference";
 
 auto url_base = "cppreference.com"s;
-auto lang = "en"s;
+//auto lang = "en"s;
+auto lang = "dev"s;
 auto protocol = "https"s;
-auto normal_page = "w"s;
-auto start_page = "https://en.cppreference.com/w/Main_Page.html"s;
+//auto normal_page = "/w"s;
+auto normal_page = ""s;
+
 
 auto make_base_url() {
     return std::format("{}://{}.{}", protocol, lang, url_base);
@@ -68,8 +73,35 @@ auto make_normal_page_url(auto &&page) {
     if (page.starts_with("http")) {
         return page;
     }
-    return std::format("{}/{}/{}", make_base_url(), normal_page, primitives::http::url_encode(page));
+    return std::format("{}{}/{}", make_base_url(), normal_page,
+        //primitives::http::url_encode(page)
+        page
+    );
 }
+auto make_edit_page_url(auto &&page) {
+    if (page.starts_with("http")) {
+        throw;
+    }
+    return make_normal_page_url(std::format("index.php?title={}&action=edit", page));
+}
+
+auto start_page = make_normal_page_url("Main_Page"s);
+
+std::set<std::string> mediawiki_pages;
+auto forbidden_pages = []() {
+    std::set<std::string> fp;
+    fp.insert("Special:"s);
+    fp.insert("Template_talk:"s);
+    fp.insert("Cppreference:"s);
+    fp.insert("Talk:"s);
+    fp.insert("Category:"s);
+    fp.insert("File:"s);
+    fp.insert("MediaWiki:"s);
+    fp.insert("User:"s);
+    fp.insert("ftp:"s);
+    fp.insert("javascript:"s);
+    return fp;
+}();
 
 auto download_url(auto &&url) {
     return cache().find<url_request_cache>(url, [&]() {
@@ -107,14 +139,23 @@ struct page {
         for (auto &&n : r | std::views::filter([](auto &&n){return n.is("a"sv) && n.has("href"sv);})) {
             auto a = n.attribute("href");
             std::string l{*a};
-            if (l.starts_with("http"sv)) {
-                continue;
-            }
-            if (l.starts_with('/')) {
+            if (l.starts_with("http"sv) || l.contains(".php"sv) || l.contains("javascript:"sv)) {
                 continue;
             }
             l = l.substr(0, l.find('#')); // take everything before '#'
             l = l.substr(0, l.find('?')); // take everything before '?'
+            if (l.starts_with('/')) {
+                l = l.substr(1);
+                if (l.empty()) {
+                    continue;
+                }
+                links.insert(l); // we must parse everything because template pages are not fully connected
+                links.insert(make_edit_page_url(l));
+                continue;
+            }
+            if (l.empty()) {
+                continue;
+            }
             path u{url};
             if (!l.starts_with("http"sv) && !l.starts_with("../"sv)) {
                 u = u.parent_path();
@@ -171,14 +212,12 @@ struct parser {
                 links.insert_range(pages[p].links);
             }
             std::erase_if(links, [&](auto &&t) {
+                auto mw = t.starts_with("MediaWiki:"sv);
+                if (mw) {
+                    mediawiki_pages.insert(t);
+                }
                 return processed_pages.contains(t)
-                    || t.starts_with("https://en.cppreference.com/w/Cppreference"sv)
-                    || t.starts_with("https://en.cppreference.com/w/Talk"sv)
-                    || t.starts_with("https://en.cppreference.com/w/Category"sv)
-                    || t.starts_with("https://en.cppreference.com/w/File"sv)
-                    || t.starts_with("https://en.cppreference.com/w/MediaWiki"sv)
-                    || t.starts_with("https://en.cppreference.com/w/User"sv)
-                    || t.starts_with("https://en.cppreference.com/w/c/ftp:"sv)
+                    || std::ranges::any_of(forbidden_pages, [&](auto &fp){return t.contains(fp);})
                     ;
                 });
             pages_to_load = links;
@@ -1034,18 +1073,29 @@ struct cpp_traverser {
     }
 };
 
-void pages_to_cpp(const path &root) {
-    std::println("parsing...");
+struct processor {
+    struct mw_template {
+        static inline constexpr auto tpl = "Template:"sv;
 
-    cpp_emitter all;
-    all.add_line("#pragma once");
-    all.add_line();
-    auto &headers = all.create_inline_emitter();
-    auto struct_name = "pages"s;
-    all.begin_block("struct " + struct_name + " {");
-    auto &members = all.create_inline_emitter();
+        std::string name;
+        std::string body;
 
-    auto fix_name = [](std::string s) {
+        bool is_template() const {
+            return name.starts_with(tpl);
+        }
+        auto cpp_name() const {
+            auto n = name;
+            if (is_template()) {
+                n.substr(tpl.size());
+            }
+            return n;
+        }
+    };
+
+    std::map<std::string, int> vars;
+    std::map<std::string, mw_template> mw_templates;
+
+    auto fix_name(std::string s) {
         boost::replace_all(s, "NAN", "NAN_");
         boost::replace_all(s, ".", "_");
         boost::replace_all(s, "-", "_");
@@ -1059,15 +1109,22 @@ void pages_to_cpp(const path &root) {
         boost::replace_all(s, "\n", "");
         boost::replace_all(s, "\r", "");
         return s;
-        };
-    auto fix2_name = [](std::string s) {
+    }
+    auto fix2_name(std::string s) {
         boost::replace_all(s, "/", "_slash_");
         boost::replace_all(s, " ", "_");
         boost::replace_all(s, "\n", "");
         boost::replace_all(s, "\r", "");
         return s;
-        };
-    auto make_ns = [&](std::string in) {
+    }
+    auto fix_template_name_for_fs(std::string s) {
+        s = fix_name(s);
+        boost::replace_all(s, " ", "_");
+        boost::replace_all(s, ":", "_colon");
+        boost::replace_all(s, "*", "_star");
+        return s;
+    }
+    auto make_ns(std::string in) {
         std::string s;
         for (auto &&t : split_string(in, "/")) {
             s += "ns_" + t + "::";
@@ -1076,59 +1133,191 @@ void pages_to_cpp(const path &root) {
         s.pop_back();
         s.pop_back();
         return s;
-        };
-    std::map<std::string, int> vars;
-    auto make_var = [&](std::string in) {
+    }
+    auto make_var(std::string in) {
         in = fix2_name(in);
-        if (auto [it,inserted] = vars.emplace(in, 0); !inserted) {
+        if (auto [it, inserted] = vars.emplace(in, 0); !inserted) {
             in += std::format("{}", ++it->second);
         }
         return in;
-        };
+    }
 
-    bool all_only{};
-    //all_only = true;
-    std::set<std::string> pages;
-    //primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
-    //for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
-    for (auto &&[p,db_p] : cache().get_all<url_request_cache>()) {
-        auto n = p;
-        if (n.starts_with("http")) {
-            auto w = "/w/"sv;
-            if (!n.contains(w)) {
+    void pages_to_cpp(const path &root) {
+        std::println("parsing...");
+
+        cpp_emitter all;
+        all.add_line("#pragma once");
+        all.add_line();
+        auto &headers = all.create_inline_emitter();
+        auto struct_name = "pages"s;
+        all.begin_block("struct " + struct_name + " {");
+        auto &members = all.create_inline_emitter();
+
+        bool all_only{};
+        //all_only = true;
+        std::set<std::string> pages;
+        //primitives::sqlite::sqlitemgr db{ path{mirror_root_dir} += ".db" };
+        //for (auto &&db_p : db.select<::db::parser::schema::tables_::page>()) {
+        for (auto &&[p,db_p] : cache().get_all<url_request_cache>()) {
+            auto n = p;
+            if (n.starts_with("http")) {
+                auto w = "/w/"sv;
+                if (!n.contains(w)) {
+                    continue;
+                }
+                n = n.substr(n.find(w) + w.size());
+            }
+            if (n.ends_with(".html"s)) {
+                n = n.substr(0, n.size() - 5);
+            }
+            boost::replace_all(n, "%2522", "\"");
+            boost::replace_all(n, "%252A", "+");
+            if (1
+                && n != "Main_Page"sv
+                //&& n != "cpp/utility/format"sv
+                //&& n != "cpp/compiler_support"sv
+                //&& n != "c/numeric/math/NAN"sv
+                //&& n != "cpp/header/algorithm"sv
+                //&& n != "cpp/header/stdatomic.h"sv
+                //&& n != "cpp/utility/expected"sv
+                //&& n != "cpp/memory/new/operator_delete"sv
+                ) {
                 continue;
             }
-            n = n.substr(n.find(w) + w.size());
-        }
-        if (n.ends_with(".html"s)) {
-            n = n.substr(0, n.size() - 5);
-        }
-        boost::replace_all(n, "%2522", "\"");
-        boost::replace_all(n, "%252A", "+");
-        if (1
-            && n != "Main_Page"sv
-            //&& n != "cpp/utility/format"sv
-            //&& n != "cpp/compiler_support"sv
-            //&& n != "c/numeric/math/NAN"sv
-            //&& n != "cpp/header/algorithm"sv
-            //&& n != "cpp/header/stdatomic.h"sv
-            //&& n != "cpp/utility/expected"sv
-            //&& n != "cpp/memory/new/operator_delete"sv
-            ) {
-            continue;
+
+            n = fix_name(n);
+
+            pages.insert(n);
+            if (!all_only) {
+                std::println("[{}] {}", pages.size(), n);
+            }
+
+            auto ns = make_ns(n);
+
+            html_page page{ db_p };
+
+            cpp_emitter page_emitter;
+            page_emitter.begin_namespace(ns);
+            page_emitter.begin_block("struct page {");
+            page_emitter.add_line(std::format("std::string filename{{\"{}\"s}};", n));
+            page_emitter.add_line(std::format("std::string title{{R\"xxx({})xxx\"s}};", boost::trim_copy(page.value("id", "firstHeading"))));
+            page_emitter.add_line();
+            page_emitter.add_line("void render(auto &renderer);");
+            page_emitter.end_block(true);
+            page_emitter.add_line();
+            page_emitter.begin_function("void page::render(auto &renderer) {");
+            page_emitter.add_line("auto &c = renderer;");
+            page_emitter.add_line();
+
+            //begin_f(page_emitter);
+            auto contents = page.find_node("id", "mw-content-text");
+            cpp_traverser t{ page_emitter };
+            if (!all_only) {
+                t.traverse(*contents);
+            }
+
+            page_emitter.end_function();
+            page_emitter.end_namespace(ns);
+
+            path fn = n;
+            fn = fn.parent_path() / fn.stem() += ".h";
+            if (!all_only) {
+                write_file(root / fn, page_emitter.get_text());
+            }
         }
 
-        n = fix_name(n);
+        std::println("parsing done");
 
-        pages.insert(n);
-        if (!all_only) {
-            std::println("[{}] {}", pages.size(), n);
+        all.add_line("void render(auto &&renderer);");
+        all.end_block(true);
+        all.add_line();
+        all.begin_function("void " + struct_name + "::render(auto &&renderer) {");
+        all.add_line();
+        auto &calls = all.create_inline_emitter();
+        all.end_function();
+
+        calls.add_line("// we can use reflection to do for each all members");
+        for (auto &&n : pages) {
+            auto ns = make_ns(n);
+            auto v = make_var(n);
+
+            headers.add_line(std::format("#include \"{}.h\"", n));
+            members.add_line(ns + "::page " + v + ";");
+            calls.add_line("renderer.render(" + v + ");");
+        }
+        //headers.add_line();
+
+        write_file(root / "all.h", all.get_text());
+    }
+    void template_pages_to_cpp(const path &root) {
+        std::println("parsing...");
+
+        cpp_emitter all;
+        all.add_line("#pragma once");
+        all.add_line();
+        auto &headers = all.create_inline_emitter();
+        auto struct_name = "pages"s;
+        all.begin_block("struct " + struct_name + " {");
+        auto &members = all.create_inline_emitter();
+
+        std::set<std::string> pages;
+        for (auto &&[p, db_p] : cache().get_all<url_request_cache>()) {
+            auto n = p;
+            boost::replace_all(n, "%2522", "\"");
+            boost::replace_all(n, "%252A", "+");
+            if (1
+                && (!n.contains("action=edit"))
+                //&& n != "cpp/utility/format"sv
+                //&& n != "cpp/compiler_support"sv
+                //&& n != "c/numeric/math/NAN"sv
+                //&& n != "cpp/header/algorithm"sv
+                //&& n != "cpp/header/stdatomic.h"sv
+                //&& n != "cpp/utility/expected"sv
+                //&& n != "cpp/memory/new/operator_delete"sv
+                ) {
+                continue;
+            }
+
+
+            n = n.substr(0, n.find('&'));
+            n = n.substr(n.find('=') + 1);
+
+            html_page page{ db_p };
+
+            auto template_source = page.find_node("name", "wpTextbox1"); // or id= too
+            if (!template_source) {
+                throw std::runtime_error{"bad template: can't find textarea"};
+            }
+
+            auto &t = mw_templates[n];
+            t.name = n;
+            t.body = template_source->text();
         }
 
+        std::println("parsing done");
+
+        std::string python_uploader = R"(# -*- coding: utf-8 -*-
+
+from wikiapi import *
+
+with ThreadPoolExecutor(max_workers=1) as executor:
+)";
+        for (int n{}; auto &&[_,t] : mw_templates) {
+            if (t.is_template()) {
+
+            } else {
+
+            }
+            auto fn = path{"generated"} / "mediawiki2" / fix_template_name_for_fs(t.name) += ".txt";
+            write_file(fn, t.body);
+            python_uploader += std::format("    executor.submit(make_page, {}, '{}', '{}')\n", ++n, t.name, normalize_path(fn).string());
+        }
+        write_file("wikiapi_pages2.py", python_uploader);
+        return;
+
+        //
+        /*
         auto ns = make_ns(n);
-
-        html_page page{ db_p };
-
         cpp_emitter page_emitter;
         page_emitter.begin_namespace(ns);
         page_emitter.begin_block("struct page {");
@@ -1142,13 +1331,6 @@ void pages_to_cpp(const path &root) {
         page_emitter.add_line("auto &c = renderer;");
         page_emitter.add_line();
 
-        //begin_f(page_emitter);
-        auto contents = page.find_node("id", "mw-content-text");
-        cpp_traverser t{ page_emitter };
-        if (!all_only) {
-            t.traverse(*contents);
-        }
-
         page_emitter.end_function();
         page_emitter.end_namespace(ns);
 
@@ -1156,36 +1338,37 @@ void pages_to_cpp(const path &root) {
         fn = fn.parent_path() / fn.stem() += ".h";
         if (!all_only) {
             write_file(root / fn, page_emitter.get_text());
+        }*/
+
+        //
+        all.add_line("void render(auto &&renderer);");
+        all.end_block(true);
+        all.add_line();
+        all.begin_function("void " + struct_name + "::render(auto &&renderer) {");
+        all.add_line();
+        auto &calls = all.create_inline_emitter();
+        all.end_function();
+
+        calls.add_line("// we can use reflection to do for each all members");
+        for (auto &&n : pages) {
+            auto ns = make_ns(n);
+            auto v = make_var(n);
+
+            headers.add_line(std::format("#include \"{}.h\"", n));
+            members.add_line(ns + "::page " + v + ";");
+            calls.add_line("renderer.render(" + v + ");");
         }
+        //headers.add_line();
+
+        write_file(root / "all.h", all.get_text());
     }
-
-    std::println("parsing done");
-
-    all.add_line("void render(auto &&renderer);");
-    all.end_block(true);
-    all.add_line();
-    all.begin_function("void " + struct_name + "::render(auto &&renderer) {");
-    all.add_line();
-    auto &calls = all.create_inline_emitter();
-    all.end_function();
-
-    calls.add_line("// we can use reflection to do for each all members");
-    for (auto &&n : pages) {
-        auto ns = make_ns(n);
-        auto v = make_var(n);
-
-        headers.add_line(std::format("#include \"{}.h\"", n));
-        members.add_line(ns + "::page " + v + ";");
-        calls.add_line("renderer.render(" + v + ");");
-    }
-    //headers.add_line();
-
-    write_file(root / "all.h", all.get_text());
-}
+};
 
 int main(int argc, char *argv[]) {
     path root_dir{ "generated/cpp" };
-    //parse();
-    pages_to_cpp(root_dir);
+    parse();
+    //pages_to_cpp(root_dir);
+    processor p;
+    p.template_pages_to_cpp(root_dir);
     return 0;
 }
